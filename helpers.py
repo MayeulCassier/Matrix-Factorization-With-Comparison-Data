@@ -51,7 +51,7 @@ The ouputs are stored in a dictionary in the format:
 ]
 """
 def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu', 
-                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5):
+                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False):
     """
     Runs experiments over multiple hyperparameter configurations.
     If a parameter is given as a list, it will iterate over all combinations.
@@ -94,7 +94,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
         results = run_experiment(
             n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
             s=param_set['s'], device=device, lr=param_set['lr'], 
-            weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=False
+            weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=open_browser
         )
         
         all_results.append({'params': param_set, 'results': results})
@@ -368,8 +368,8 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
     
         # Log validation loss to TensorBoard
         if is_last:
-            writer.add_scalars('Losses', {'train': total_loss / len(train_loader), 
-                              'val': val_loss / len(val_loader)}, epoch)
+            writer.add_scalars('Losses', {'train': train_loss, 
+                              'val': val_loss}, epoch)
     if is_last:
         writer.close()  # Close TensorBoard writer
     
