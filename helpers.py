@@ -11,8 +11,7 @@ import os
 import subprocess
 import webbrowser
 import itertools
-import matplotlib.pyplot as plt
-import seaborn as sns
+
 
 ############################################
 # This file contains Helper functions for matrix factorization
@@ -76,7 +75,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     
     # Convert scalar values to lists for iteration
     param_dict = {'n': n, 'm': m, 'd': d, 'p': p, 'lr': lr, 
-                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps}
+                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s}
     
     for key, value in param_dict.items():
         if not isinstance(value, (list, tuple)):
@@ -94,8 +93,8 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
         
         results = run_experiment(
             n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
-            s=s, device=device, lr=param_set['lr'], 
-            weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs']
+            s=param_set['s'], device=device, lr=param_set['lr'], 
+            weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=False
         )
         
         all_results.append({'params': param_set, 'results': results})
@@ -103,7 +102,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     return all_results
 
 # Principal function to run the experiments
-def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100):
+def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False):
     """
     Runs multiple experiments for matrix factorization with BTL preference data.
 
@@ -145,7 +144,8 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         # Step 6: Train the model and retrieve losses
-        t_losses, v_losses = train_model(model, train_loader, val_loader, optimizer, device, num_epochs=num_epochs, is_last=(rep == reps-1))
+        t_losses, v_losses = train_model(model, train_loader, val_loader, optimizer, device, num_epochs=num_epochs,
+                                          is_last=(rep == reps-1), open_browser=open_browser)
         train_losses.append(t_losses)
         val_losses.append(v_losses)
 
@@ -309,7 +309,7 @@ class MatrixFactorization(nn.Module):
 ############################################
 
 
-def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=100, is_last=False):
+def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=100, is_last=False, open_browser=False):
     """
     Trains a matrix factorization model using binary cross-entropy loss.
 
@@ -328,7 +328,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
     # Define logging directory for TensorBoard and reset previous logs
     if is_last:
         log_dir = 'runs/matrix_factorization'
-        start_tensorboard(log_dir=log_dir)
+        start_tensorboard(log_dir=log_dir, open_browser=open_browser)
         writer = SummaryWriter(log_dir=log_dir)
     
     train_losses = []
@@ -352,9 +352,6 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
         train_loss = total_loss / len(train_loader)
         train_losses.append(train_loss)
     
-        # Log training loss to TensorBoard
-        if is_last:
-            writer.add_scalar('Loss/train', train_loss, epoch)
     
         # Validation phase
         val_loss = 0
@@ -371,8 +368,8 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
     
         # Log validation loss to TensorBoard
         if is_last:
-            writer.add_scalar('Loss/val', val_loss, epoch)
-    
+            writer.add_scalars('Losses', {'train': total_loss / len(train_loader), 
+                              'val': val_loss / len(val_loader)}, epoch)
     if is_last:
         writer.close()  # Close TensorBoard writer
     
@@ -522,7 +519,7 @@ def split_dataset(dataset, num_datapoints, train_ratio=0.8, val_ratio=0.1, batch
 
     return train_loader, val_loader, test_loader
 
-def start_tensorboard(log_dir='runs/matrix_factorization', port=6006):
+def start_tensorboard(log_dir='runs/matrix_factorization', port=6006, open_browser=True):
     """Starts TensorBoard and opens it in the default web browser."""
     # Remove old logs
     shutil.rmtree(log_dir, ignore_errors=True)
@@ -535,8 +532,9 @@ def start_tensorboard(log_dir='runs/matrix_factorization', port=6006):
     time.sleep(3)
     
     # Open TensorBoard in the browser
-    # webbrowser.open(f"http://localhost:{port}/")
-    # print(f"🔥 TensorBoard launched at http://localhost:{port}/")
+    if open_browser:
+        webbrowser.open(f"http://localhost:{port}/")
+        print(f"🔥 TensorBoard launched at http://localhost:{port}/")
 
 
 ############################################
