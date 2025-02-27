@@ -12,6 +12,7 @@ import subprocess
 import webbrowser
 import itertools
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 ############################################
 # This file contains Helper functions for matrix factorization
@@ -845,55 +846,3 @@ def generate_gmm_embeddings(n, m, d, num_clusters=5, device="cpu"):
     return U, V
 
 
-############################################
-# These functions are used to visualize the results
-############################################
-
-# Plotting the losses
-def plot_losses(results, param_index=None):
-    """
-    Plots training and validation losses.
-    
-    Parameters:
-    - results (list): The output from parameter_scan.
-    - param_index (int, optional): The index of a specific experiment to plot train & val losses on the same graph.
-      If None, plots all training losses in one graph and all validation losses in another.
-    """
-    if param_index is not None:
-        # Plot a specific experiment's train and validation loss on the same graph
-        exp = results[param_index]
-        train_losses = exp['results']['train_losses']
-        val_losses = exp['results']['val_losses']
-        
-        plt.figure(figsize=(10, 5))
-        for rep in range(len(train_losses)):
-            plt.plot(train_losses[rep], label=f'Train Loss (rep {rep+1})', linestyle='--')
-            plt.plot(val_losses[rep], label=f'Val Loss (rep {rep+1})')
-        
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.title(f"Train & Val Loss for {exp['params']}")
-        plt.legend()
-        plt.show()
-    else:
-        # Plot all train losses in one graph
-        plt.figure(figsize=(10, 5))
-        for i, exp in enumerate(results):
-            for rep in range(len(exp['results']['train_losses'])):
-                plt.plot(exp['results']['train_losses'][rep], label=f'Exp {i+1}, Rep {rep+1}')
-        plt.xlabel("Epochs")
-        plt.ylabel("Train Loss")
-        plt.title("Training Losses for All Experiments")
-        plt.legend()
-        plt.show()
-
-        # Plot all validation losses in one graph
-        plt.figure(figsize=(10, 5))
-        for i, exp in enumerate(results):
-            for rep in range(len(exp['results']['val_losses'])):
-                plt.plot(exp['results']['val_losses'][rep], label=f'Exp {i+1}, Rep {rep+1}')
-        plt.xlabel("Epochs")
-        plt.ylabel("Validation Loss")
-        plt.title("Validation Losses for All Experiments")
-        plt.legend()
-        plt.show()
