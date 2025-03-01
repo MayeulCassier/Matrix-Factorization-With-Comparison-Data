@@ -126,7 +126,7 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
     gt_accuracy, gt_log_likelihoods, train_losses, val_losses = [], [], [], []
 
     for rep in range(reps):
-        print(f"\n### Experiment {rep+1}/{reps} started... ###")
+        # print(f"\n### Experiment {rep+1}/{reps} started... ###")
 
         # Step 1: Generate embeddings
         U, V = generate_embeddings(n, m, d, device)
@@ -164,7 +164,7 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         gt_log_likelihoods.append(-gt_loss)
         gt_accuracy.append(gt_acc)
 
-        print(f"### Experiment {rep+1}/{reps} completed ###")
+        # print(f"### Experiment {rep+1}/{reps} completed ###")
 
     return {
         "reconstruction_errors": reconstruction_errors,

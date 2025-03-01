@@ -114,7 +114,7 @@ def plot_heatmap_best_fixed(results, param_x, param_y, result_metric):
 
 
 # heatmap between two parameters for maximum value of a result metric with fixed values for other parameters
-def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index):
+def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index, ax = None):
     """
     Plots a heatmap of two chosen parameters against a selected result metric, with fixed values for other parameters.
     
@@ -124,9 +124,12 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index):
     - param_y (str): Name of the second parameter.
     - result_metric (str): The result metric to use for coloring the heatmap.
     - fixed_index (int): The index of the experiment that should be used to fix other parameters.
+
     """
     fixed_params = results[fixed_index]['params']
     data = {}
+    
+
     
     for exp in results:
         if all(exp['params'][key] == fixed_params[key] for key in fixed_params if key not in [param_x, param_y]):
@@ -148,12 +151,25 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index):
         y_idx = y_values.index(y)
         heatmap_matrix[y_idx, x_idx] = value
     
-    plt.figure(figsize=(10, 7))
-    sns.heatmap(heatmap_matrix, xticklabels=x_values, yticklabels=y_values, annot=True, cmap="coolwarm")
-    plt.xlabel(param_x)
-    plt.ylabel(param_y)
-    plt.title(f"Heatmap of {result_metric} by {param_x} and {param_y} (Fixed at Index {fixed_index})")
-    plt.show()
+    # Flag to track if we're in standalone mode
+    standalone_mode = False
+
+    # If no `ax` is provided, create a new figure
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 7))  # Create a standalone figure
+        standalone_mode = True  # We created ax, so we're in standalone mode
+
+    # Plot the heatmap on the specified Axes
+    sns.heatmap(heatmap_matrix, xticklabels=x_values, yticklabels=y_values, annot=True, cmap="coolwarm", ax=ax)
+
+    # Set labels and title
+    ax.set_xlabel(param_x)
+    ax.set_ylabel(param_y)
+    ax.set_title(f"Heatmap of {result_metric} by {param_x} and {param_y} (Fixed at Index {fixed_index})")
+
+    # Show the plot only if we created the figure
+    if standalone_mode:
+        plt.show()
 
 # display the indices of the experiments
 def display_experiment_indices(results):
