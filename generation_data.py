@@ -340,13 +340,16 @@ def choose_items_by_variance(V):
     j = torch.argmin(variances).item()
     return i, j
 
-def choose_items_by_popularity(popularity_dist):
+def choose_items_by_popularity(m, method="zipf", alpha=1.5):
     """
     Chooses items based on a popularity distribution.
     """
-    i = np.random.choice(len(popularity_dist), p=popularity_dist)
-    j = np.random.choice(len(popularity_dist), p=1 - popularity_dist)
-    return i, j if i != j else choose_items_by_popularity(popularity_dist)
+    popularity_dist = generate_popularity_distribution(m, method, alpha)
+    i=j=0
+    while i==j:
+        i = np.random.choice(len(popularity_dist), p=popularity_dist)
+        j = np.random.choice(len(popularity_dist), p=1 - popularity_dist)
+    return i, j 
 
 import numpy as np
 
@@ -374,13 +377,6 @@ def generate_popularity_distribution(m, method="zipf", alpha=1.5):
     else:
         raise ValueError("Invalid method. Choose from 'uniform', 'zipf', or 'exponential'.")
 
-# Example: Generate a Zipf popularity distribution for 10 items
-popularity_dist = generate_popularity_distribution(10, method="zipf")
-
-# Choose items based on popularity
-i, j = np.random.choice(len(popularity_dist), 2, p=popularity_dist, replace=False)
-print(f"Selected items: {i}, {j}")
-
 
 ############################################
 # These Funtions compute the preference score
@@ -389,40 +385,23 @@ print(f"Selected items: {i}, {j}")
 
 def sigmoid_preference(U, V, u, i, j, scale=1.0):
     """
-    Computes preference using a sigmoid function.
+    Computes preference using a sigmoid function, returning 1 or 0.
     """
-    return torch.sigmoid(scale * torch.dot(U[u], (V[i] - V[j])))
-
-def noisy_sigmoid_preference(U, V, u, i, j, scale=1.0, noise_std=0.1):
-    """
-    Computes preference with Gaussian noise.
-    """
-    base_score = torch.dot(U[u], (V[i] - V[j]))
-    noise = torch.randn(1) * noise_std
-    return torch.sigmoid(scale * (base_score + noise))
+    return int(torch.sigmoid(scale * torch.dot(U[u], (V[i] - V[j]))).item() > 0.5)
 
 def softmax_preference(U, V, u, i, j, temp=1.0):
     """
-    Computes a preference using a softmax over multiple items.
+    Computes a preference using a softmax over multiple items, returning 1 or 0.
     """
     scores = torch.matmul(V, U[u]) / temp
     probs = torch.softmax(scores, dim=0)
-    return probs[i] / (probs[i] + probs[j])
+    return int(probs[i].item() > probs[j].item())
 
-def quartile_preference(U, V, u, i, j):
+def max_preference(U, V, u, i, j):
     """
-    Returns a quartile ranking rather than a probability.
+    Returns 1 if item i is preferred over j, otherwise 0.
     """
     score = torch.dot(U[u], (V[i] - V[j]))
-    if score > 1.0:
-        return 1  # Strong preference for i
-    elif score > 0.5:
-        return 0.75  # Moderate preference
-    elif score > -0.5:
-        return 0.5  # Neutral
-    elif score > -1.0:
-        return 0.25  # Moderate preference for j
-    else:
-        return 0  # Strong preference for j
+    return int(score.item() > 0)
 
 
