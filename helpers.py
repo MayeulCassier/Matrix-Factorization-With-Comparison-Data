@@ -51,7 +51,7 @@ The ouputs are stored in a dictionary in the format:
 ]
 """
 def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu', 
-                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False):
+                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False, linear = False, num_label=1):
     """
     Runs experiments over multiple hyperparameter configurations.
     If a parameter is given as a list, it will iterate over all combinations.
@@ -68,6 +68,9 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     - weight_decay (float or list): Weight decay for regularization.
     - num_epochs (int or list): Number of training epochs.
     - reps (int or list): Number of repetitions per experiment.
+    - open_browser (bool): Whether to open TensorBoard in the default web browser.
+    - linear (bool): Whether to perform a linear scan (synchronized index) or full combination scan.
+    - num_label (int): Number of labels per preference comparison.
 
     Returns:
     - dict: Results of each experiment configuration.
@@ -75,7 +78,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     
     # Convert scalar values to lists for iteration
     param_dict = {'n': n, 'm': m, 'd': d, 'p': p, 'lr': lr, 
-                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s}
+                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s, 'num_label': num_label}
     param_dict = {
         k: list(v) if isinstance(v, np.ndarray) else
            [float(x) if isinstance(x, (np.float32, np.float64)) else int(x) if isinstance(x, np.integer) else x for x in v] 
@@ -83,30 +86,51 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
            float(v) if isinstance(v, (np.float32, np.float64)) else int(v) if isinstance(v, np.integer) else v
         for k, v in param_dict.items()
     }
-    
+    # Filter out non-list parameters
+    list_params = [v for v in param_dict.values() if isinstance(v, list)]
+
+    # Condition for activating linear scan
+    if len(list_params) <= 1:  
+        stop = True  # 0 or 1 list → always True
+    else:
+        stop = all(len(v) == len(list_params[0]) for v in list_params)  # Vérify if all lists have the same length
+
     for key, value in param_dict.items():
         if not isinstance(value, (list, tuple)):
             param_dict[key] = [value]  # Wrap single values in a list
-    
-    # Generate all combinations of hyperparameters
-    param_combinations = list(itertools.product(*param_dict.values()))
-    
-    # Store results
-    all_results = []
-    
-    for params in param_combinations:
-        param_set = dict(zip(param_dict.keys(), params))
-        print(f"\nRunning experiment with parameters: {param_set}")
+    if not linear:
+        # Generate all combinations of hyperparameters
+        param_combinations = list(itertools.product(*param_dict.values()))
         
-        results = run_experiment(
-            n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
-            s=param_set['s'], device=device, lr=param_set['lr'], 
-            weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=open_browser
-        )
+        # Store results
+        all_results = []
         
-        all_results.append({'params': param_set, 'results': results})
-    
-    return all_results
+        for params in param_combinations:
+            param_set = dict(zip(param_dict.keys(), params))
+            print(f"\nRunning experiment with parameters: {param_set}")
+            
+            results = run_experiment(
+                n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
+                s=param_set['s'], device=device, lr=param_set['lr'], 
+                weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=open_browser, num_label=param_set['num_label']
+            )
+            
+            all_results.append({'params': param_set, 'results': results})
+        
+        return all_results
+    elif linear and stop:
+        # Linear scan (synchronized index)
+        all_results = []
+        for i in range(len(list_params[0])):
+            params = {k: v[i] if len(v) > 1 else v[0] for k, v in param_dict.items()}
+            print(f"\nRunning experiment with parameters: {params}")
+            results = run_experiment(
+                n=params['n'], m=params['m'], d=params['d'], p=params['p'], 
+                s=params['s'], device=device, lr=params['lr'], 
+                weight_decay=params['weight_decay'], reps=params['reps'], num_epochs=params['num_epochs'], open_browser=open_browser, num_label=params['num_label']
+            )
+            all_results.append({'params': params, 'results': results})
+        return all_results
 
 # Principal function to run the experiments
 def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, num_label=1):
@@ -639,7 +663,7 @@ def parameter_scan_ground_truth(n, m, p, d, s, device, num_label, linear=False):
 
     if linear and stop:
         # Linear scan (synchronized index)
-        for i in range(len(list_params[0])):
+        for i in tqdm(range(len(list_params[0])), desc="Training Progress"):
             params = {k: v[i] if len(v) > 1 else v[0] for k, v in param_dict.items()}
             gt_loss, gt_accuracy = evaluate_ground_truth(**params, device=device) 
             results.append({'params': params, 'results': {'gt_loss': [gt_loss], 'gt_accuracy': [gt_accuracy]}})
@@ -647,7 +671,7 @@ def parameter_scan_ground_truth(n, m, p, d, s, device, num_label, linear=False):
     else:
         # Full combination scan
         param_combinations = list(itertools.product(*param_dict.values()))
-        for params in param_combinations:
+        for params in tqdm(param_combinations, desc="Training Progress"):
             param_set = dict(zip(param_dict.keys(), params))
             gt_loss, gt_accuracy = evaluate_ground_truth(**param_set, device=device)
             results.append({'params': param_set, 'results': {'gt_loss': [gt_loss], 'gt_accuracy': [gt_accuracy]}})
