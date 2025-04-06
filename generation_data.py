@@ -1,40 +1,61 @@
 import torch # type: ignore
 import networkx as nx
 from sklearn.mixture import GaussianMixture
-
+from scipy.stats import ortho_group
+import numpy as np
 
 ############################################
 # These Funtions create U and V with different structures
 ############################################
 
 
-def generate_embeddings(n, m, d, device):
+def generate_embeddings(n, m, d, device="cpu"):
     """
-    Generates random user (U) and item (V) embeddings for matrix factorization.
-    - Normal distribution (mean 0, variance 1) for U and V
+    Efficiently generates a low-rank matrix X = U S V^T where S has rank d,
+    and U, V are orthogonal matrices.
 
     Parameters:
-    n (int): Number of users.
-    m (int): Number of items.
-    d (int): Latent dimension (embedding size).
-    device (torch.device): The device where tensors will be stored (CPU/GPU).
+    - n1 (int): Number of rows.
+    - n2 (int): Number of columns.
+    - d (int): Target rank (d <= min(n1, n2)).
 
     Returns:
-    tuple: User embeddings U (n x d) and item embeddings V (m x d).
+    - X (ndarray): Matrix of shape (n1, n2).
     """
+    n1 = min(n, m)
+    s = np.zeros(n1)
+    s[:d] = 1.0 / np.sqrt(d)
+
+    S = np.zeros((n, m))
+    S[:n1, :n1] = np.diag(s)
+    U = ortho_group.rvs(dim=n)
+    V = ortho_group.rvs(dim=m)
     
-    # Convert d to a tensor for numerical stability
-    d_tensor = torch.tensor(d, dtype=torch.float32)
+    X = U @ S @ V.T * 500
+    mean_X = np.mean(X, axis=0)
+    return torch.tensor(X, dtype=torch.float32, device=device)
 
-    # Initialize user embeddings (U) and item embeddings (V) with random values
-    # Normalize by sqrt(d) to keep variance stable
-    U = torch.randn(n, d, device=device) / torch.sqrt(d_tensor) # n x d
-    V = torch.randn(m, d, device=device) / torch.sqrt(d_tensor) # m x d
+def generate_low_rank_matrix(n, m, d, rank, device="cpu"):
+    """
+    Generates a low-rank matrix X = U diag(S) V^T with orthonormal U and V.
+    - U: (n x d), V: (m x d), both orthonormal
+    - S: [1, ..., 1, 0, ..., 0] (rank ones)
+    """
+    # Generate orthonormal U and V
+    U_np = ortho_group.rvs(dim=n)[:, :d]  # shape (n x d)
+    V_np = ortho_group.rvs(dim=m)[:, :d]  # shape (m x d)
 
-    # Center the item embeddings by subtracting the mean per row
-    V -= torch.mean(V, dim=1, keepdim=True)
+    # Create singular values S
+    S = torch.zeros(d)
+    S[:rank] = 1.0
 
-    return U, V
+    # Convert to torch
+    U = torch.tensor(U_np, dtype=torch.float32, device=device)
+    V = torch.tensor(V_np, dtype=torch.float32, device=device)
+    
+    return U, V, S
+
+
 
 def generate_structured_embeddings(n, m, d, num_clusters=5, cluster_std=0.1, device="cpu"):
     """

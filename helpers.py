@@ -51,7 +51,7 @@ The ouputs are stored in a dictionary in the format:
 ]
 """
 def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu', 
-                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False, linear = False, num_label=1):
+                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False, linear = False, K=1, d1 = None):
     """
     Runs experiments over multiple hyperparameter configurations.
     If a parameter is given as a list, it will iterate over all combinations.
@@ -70,7 +70,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     - reps (int or list): Number of repetitions per experiment.
     - open_browser (bool): Whether to open TensorBoard in the default web browser.
     - linear (bool): Whether to perform a linear scan (synchronized index) or full combination scan.
-    - num_label (int): Number of labels per preference comparison.
+    - K (int): Number of labels per preference comparison.
 
     Returns:
     - dict: Results of each experiment configuration.
@@ -78,7 +78,7 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     
     # Convert scalar values to lists for iteration
     param_dict = {'n': n, 'm': m, 'd': d, 'p': p, 'lr': lr, 
-                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s, 'num_label': num_label}
+                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s, 'K': K, 'd1': d1}
     param_dict = {
         k: list(v) if isinstance(v, np.ndarray) else
            [float(x) if isinstance(x, (np.float32, np.float64)) else int(x) if isinstance(x, np.integer) else x for x in v] 
@@ -112,7 +112,8 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
             results = run_experiment(
                 n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
                 s=param_set['s'], device=device, lr=param_set['lr'], 
-                weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], open_browser=open_browser, num_label=param_set['num_label']
+                weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], 
+                open_browser=open_browser, K=param_set['K'], d1 = param_set['d1']
             )
             
             all_results.append({'params': param_set, 'results': results})
@@ -127,13 +128,14 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
             results = run_experiment(
                 n=params['n'], m=params['m'], d=params['d'], p=params['p'], 
                 s=params['s'], device=device, lr=params['lr'], 
-                weight_decay=params['weight_decay'], reps=params['reps'], num_epochs=params['num_epochs'], open_browser=open_browser, num_label=params['num_label']
+                weight_decay=params['weight_decay'], reps=params['reps'], num_epochs=params['num_epochs'], 
+                open_browser=open_browser, K=params['K'], d1 = param_set['d1']
             )
             all_results.append({'params': params, 'results': results})
         return all_results
 
 # Principal function to run the experiments
-def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, num_label=1):
+def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1= None):
     """
     Runs multiple experiments for matrix factorization with BTL preference data.
 
@@ -149,7 +151,7 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
     - reps (int): Number of repetitions for the experiment.
     - num_epochs (int): Number of epochs for training.
     - open_browser (bool): Whether to open TensorBoard in the default web browser.
-    - num_label (int): Number of labels per preference comparison.
+    - K (int): Number of labels per preference comparison.
 
     Returns:
     - dict: Contains reconstruction errors, log likelihoods, accuracy,
@@ -160,12 +162,13 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
 
     for rep in range(reps):
         # print(f"\n### Experiment {rep+1}/{reps} started... ###")
-
         # Step 1: Generate embeddings
-        U, V = generate_embeddings(n, m, d, device)
+        if d1 is None:
+            d1 = d
+        X = generate_embeddings(n, m, d1, device)
 
         # Step 2: Create preference dataset
-        dataset = BTLPreferenceDataset(U, V, int(n * m * p / 2), scale=s, num_label=num_label)
+        dataset = BTLPreferenceDataset(X, int(n * m * p / 2), scale=s, K=K)
 
         # Step 3: Split dataset into train, validation, and test sets
         train_loader, val_loader, test_loader = split_dataset(dataset, len(dataset))
@@ -186,10 +189,10 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         test_loss, test_accuracy = evaluate_model(model, test_loader, device)
 
         # Step 8: Compute reconstruction error
-        reconstruction_error = compute_reconstruction_error(model, U, V, s)
+        reconstruction_error = compute_reconstruction_error(model, X, s)
 
         # Step 9: Compute ground truth metrics
-        gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, U, V, device)
+        gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
 
         reconstruction_errors.append(reconstruction_error)
         log_likelihoods.append(-test_loss)
@@ -223,7 +226,7 @@ class BTLPreferenceDataset(Dataset):
     V (torch.Tensor): Item embeddings matrix (size: m_items x d).
     num_datapoints (int): Number of preference samples to generate.
     scale (float, optional): Scaling factor for preference scores (default: 1.0).
-    num_label (int, optional): Number of labels per preference comparison (default: 1).
+    K (int, optional): Number of labels per preference comparison (default: 1).
 
     Methods:
     - generate_preferences(num_datapoints): Generates pairwise preference data.
@@ -234,47 +237,38 @@ class BTLPreferenceDataset(Dataset):
     - A PyTorch Dataset containing tuples (user_id, item_i, item_j, preference_label).
     """
 
-    def __init__(self, U, V, num_datapoints, scale=1.0, num_label=1):
-        self.U = U  # User embeddings
-        self.V = V  # Item embeddings
-        self.scale = scale  # Scaling factor for preference scores
-        self.data = self.generate_preferences(num_datapoints, num_label=num_label)  # Generate dataset
+    def __init__(self, X, num_datapoints, scale=1.0, K=1):
+        self.X = X
+        self.scale = scale
+        self.data = self.generate_preferences(num_datapoints, K)
 
-    def generate_preferences(self, num_datapoints, num_label=1):
+    def generate_preferences(self, num_datapoints, K=1):
         """
         Generates pairwise preferences based on the Bradley-Terry-Luce (BTL) model.
 
         Parameters:
         num_datapoints (int): Number of preference samples to generate.
-        num_label (int): Number of labels per preference comparison.
+        K (int): Number of labels per preference comparison.
 
         Returns:
         list: A list of tuples (user_id, item_i, item_j, preference_label).
         """
-
-        n_users, d = self.U.shape  # Number of users and embedding dimension
-        m_items, _ = self.V.shape  # Number of items
+        n, m = self.X.shape
         data = []
-
         for _ in range(num_datapoints):
-            # Randomly select a user
-            u = torch.randint(0, n_users, (1,)).item()
+            # Randomly select a user and two distinct items
+            u = torch.randint(0, n, (1,)).item()
+            i, j = torch.randint(0, m, (2,)).tolist()
+            while i == j:
+                j = torch.randint(0, m, (1,)).item()
 
-            # Randomly select two different items
-            i, j = torch.randint(0, m_items, (2,)).tolist()
-            while i == j:  # Ensure i and j are not the same item
-                j = torch.randint(0, m_items, (1,)).item()
-
-            # Compute preference score using the BTL model
-            user_embedding = self.U[u]  # Retrieve user embedding
-            item_diff = self.V[i] - self.V[j]  # Compute item difference
-            preference_score = torch.sigmoid(self.scale * torch.dot(user_embedding, item_diff))
-
-            # Assign label: 1 if user prefers item i over j, else 0, num_label times
-            for _ in range(num_label):
-                label = torch.bernoulli(preference_score).item()  # Sample from Bernoulli distribution
+            # Compute the preference score using the BTL model
+            score = torch.sigmoid(self.scale * (self.X[u, i] - self.X[u, j]))
+            
+            # Generate K labels based on the score
+            for _ in range(K):
+                label = torch.bernoulli(score).item()
                 data.append((u, i, j, label))
-
         return data
 
     def __len__(self):
@@ -284,6 +278,9 @@ class BTLPreferenceDataset(Dataset):
     def __getitem__(self, idx):
         """Retrieves a specific preference datapoint."""
         return self.data[idx]
+    
+
+
 
 class MatrixFactorization(nn.Module):
     """
@@ -455,14 +452,13 @@ def evaluate_model(model, test_loader, device):
     return test_loss / len(test_loader), accuracy
 
 # Reconstruction error
-def compute_reconstruction_error(model, U, V, scale):
+def compute_reconstruction_error(model, X, scale):
     """
     Computes the reconstruction error of the matrix factorization model.
 
     Parameters:
     model (torch.nn.Module): The trained model containing learned user (U) and item (V) embeddings.
-    U (torch.Tensor): Ground truth user embeddings (size: n x d).
-    V (torch.Tensor): Ground truth item embeddings (size: m x d).
+    X (torch.Tensor): Ground truth user-item matrix (size: n x m).
     scale (float): Scaling factor applied to the ground truth embeddings.
 
     Returns:
@@ -473,10 +469,10 @@ def compute_reconstruction_error(model, U, V, scale):
     user_item_matrix = torch.mm(model.U, model.V.t())
 
     # Center the reconstructed matrix by subtracting the mean of each row
-    user_item_matrix -= torch.mean(user_item_matrix, dim=1, keepdim=True)
+    user_item_matrix -= torch.mean(user_item_matrix, dim=0, keepdim=True)
 
     # Compute the ground truth user-item matrix
-    ground_truth_matrix = scale * torch.mm(U, V.t())
+    ground_truth_matrix = scale * X
 
     # Compute the Frobenius norm of the ground truth matrix
     frobenius_norm = torch.norm(ground_truth_matrix, p="fro")
@@ -490,14 +486,13 @@ def compute_reconstruction_error(model, U, V, scale):
     return normalized_error.item()  # Return as a Python float
 
 # Ground truth metrics
-def compute_ground_truth_metrics(test_loader, U, V, device):
+def compute_ground_truth_metrics(test_loader, X, device):
     """
     Computes ground truth metrics (MSE loss and accuracy) using pre-trained embeddings.
 
     Parameters:
     test_loader (DataLoader): DataLoader for the test dataset.
-    U (torch.Tensor): Ground truth user embeddings (size: n x d).
-    V (torch.Tensor): Ground truth item embeddings (size: m x d).
+    X (torch.Tensor): User-item matrix (size: n x m) containing user-item interactions.
     device (torch.device): Device (CPU or GPU) where computation will occur.
 
     Returns:
@@ -511,28 +506,29 @@ def compute_ground_truth_metrics(test_loader, U, V, device):
         for batch in test_loader:
             u, i, j, z = [x.to(device) for x in batch]  # Move batch data to device
 
-            # Retrieve user embeddings and compute item difference
-            user_embeddings = U[u]  # Select user embeddings based on indices
-            item_diff = V[i] - V[j]  # Compute item pairwise differences
+            diff = X[u, i] - X[u, j]  # Compute item pairwise differences
 
             # Compute probability using sigmoid function
-            gt_prob = torch.sigmoid(torch.sum(user_embeddings * item_diff, dim=1))
+            gt_prob = torch.sigmoid(diff)
 
             # Compute Mean Squared Error (MSE) loss
             loss = F.mse_loss(gt_prob, z.float())
             gt_loss += loss.item()
 
             # Convert predictions to binary labels (threshold at 0)
-            gt_pred = (torch.sum(user_embeddings * item_diff, dim=1) > 0).float()
+            pred = (diff > 0).float()
 
             # Count correct predictions
-            gt_correct += (gt_pred == z).sum().item()
+            gt_correct += (pred == z).sum().item()
             gt_total += len(z)
 
-    # Compute accuracy
-    gt_accuracy = gt_correct / gt_total if gt_total > 0 else 0.0
+    # compute accuracy
+    accuracy = gt_correct / gt_total if gt_total > 0 else 0.0
 
-    return gt_loss / len(test_loader), gt_accuracy
+    return gt_loss / len(test_loader), accuracy
+
+
+
 
 
 
@@ -589,7 +585,7 @@ def start_tensorboard(log_dir='runs/matrix_factorization', port=6006, open_brows
 ############################################
 
 # test the function evaluate_ground_truth
-def evaluate_ground_truth(n, m, p, d, s, device, num_label):
+def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1):
     """
     Generates embeddings, creates preferences using BTLPreferenceDataset, 
     and computes ground truth accuracy and loss.
@@ -601,35 +597,42 @@ def evaluate_ground_truth(n, m, p, d, s, device, num_label):
     - d (int): Latent dimension size.
     - s (float): Scaling factor for preference scores.
     - device (str): Computation device ('cpu' or 'cuda').
-    - num_label (int): Number of labels per preference comparison.
+    - K (int): Number of labels per preference comparison.
+    - reps (int): Number of repetitions for the experiment.
 
     Returns:
     - tuple: Ground truth loss and accuracy.
     """
     
-    # Step 1: Generate embeddings for users and items
-    U, V = generate_embeddings(n, m, d, device)
-    
-    # Step 2: Create preference dataset using BTLPreferenceDataset
-    num_datapoints = int(n * m * p / 2)  # Total preference pairs
-    dataset = BTLPreferenceDataset(U, V, num_datapoints, scale=s, num_label=num_label)
+    losses = []
+    accuracies = []
 
-    # Step 3: Split dataset into train, validation, and test sets
-    train_loader, val_loader, test_loader = split_dataset(dataset, len(dataset))
+    for _ in range(reps):
+        # Generate new embeddings
+        X = generate_embeddings(n, m, d, device)
 
-    # Step 4: Compute ground truth metrics
-    gt_loss, gt_accuracy = compute_ground_truth_metrics(test_loader, U, V, device)
+        # Generate dataset
+        num_datapoints = int(n * m * p / 2)
+        dataset = BTLPreferenceDataset(X, num_datapoints, scale=s, K=K)
 
-    return gt_loss, gt_accuracy
+        # Split into train/val/test
+        _, _, test_loader = split_dataset(dataset, len(dataset))
+
+        # Evaluate ground truth
+        gt_loss, gt_accuracy = compute_ground_truth_metrics(test_loader, X, device)
+        losses.append(gt_loss)
+        accuracies.append(gt_accuracy)
+
+    return losses, accuracies
 
 # parameter scan for ground truth
-def parameter_scan_ground_truth(n, m, p, d, s, device, num_label, linear=False):
+def parameter_scan_ground_truth(n, m, p, d, s, device, K, linear=False, reps = 1):
     """
     Performs a parameter scan using evaluate_ground_truth, and returns results in a format
     compatible with visualization functions like heatmaps.
 
     Parameters:
-    - n, m, p, d, s, device, num_label: Same as evaluate_ground_truth
+    - n, m, p, d, s, device, K, reps: Same as evaluate_ground_truth
     - linear (bool): Whether to perform a linear scan (synchronized index) or full combination scan.
 
     Returns:
@@ -637,7 +640,7 @@ def parameter_scan_ground_truth(n, m, p, d, s, device, num_label, linear=False):
     """
 
     # Convert scalar values into lists for iteration
-    param_dict = {'n': n, 'm': m, 'p': p, 'd': d, 's': s, 'num_label': num_label}
+    param_dict = {'n': n, 'm': m, 'p': p, 'd': d, 's': s, 'K': K}
     param_dict = {
         k: list(v) if isinstance(v, np.ndarray) else
            [float(x) if isinstance(x, (np.float32, np.float64)) else int(x) if isinstance(x, np.integer) else x for x in v] 
@@ -665,15 +668,16 @@ def parameter_scan_ground_truth(n, m, p, d, s, device, num_label, linear=False):
         # Linear scan (synchronized index)
         for i in tqdm(range(len(list_params[0])), desc="Training Progress"):
             params = {k: v[i] if len(v) > 1 else v[0] for k, v in param_dict.items()}
-            gt_loss, gt_accuracy = evaluate_ground_truth(**params, device=device) 
-            results.append({'params': params, 'results': {'gt_loss': [gt_loss], 'gt_accuracy': [gt_accuracy]}})
+            gt_loss, gt_accuracy = evaluate_ground_truth(**params, device=device, reps = reps) 
+            results.append({'params': params, 'results': {'gt_loss': gt_loss, 'gt_accuracy': gt_accuracy}})
 
     else:
         # Full combination scan
         param_combinations = list(itertools.product(*param_dict.values()))
         for params in tqdm(param_combinations, desc="Training Progress"):
             param_set = dict(zip(param_dict.keys(), params))
-            gt_loss, gt_accuracy = evaluate_ground_truth(**param_set, device=device)
-            results.append({'params': param_set, 'results': {'gt_loss': [gt_loss], 'gt_accuracy': [gt_accuracy]}})
+            gt_loss, gt_accuracy = evaluate_ground_truth(**param_set, device=device, reps = reps)
+            results.append({'params': param_set, 'results': {'gt_loss': gt_loss, 'gt_accuracy': gt_accuracy}})
 
     return results
+
