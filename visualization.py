@@ -130,116 +130,132 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
         plt.show()
 
 
-def plot_heatmap_best_fixed(results, param_x, param_y, result_metric, save_path="", invert_colors=False, log_scale=False, ignored_keys=None):
+def plot_heatmap_best_fixed(results, param_x, param_y, result_metric, save_path="", invert_colors=False, log_scale=False, ignored_keys=None, overall=True, invert_x=False, invert_y=False, fig_size=(10, 7)):
     """
-    Finds the best configuration for a given result metric and generates a heatmap
-    by fixing all parameters except param_x and param_y.
-    
+    Plots a heatmap of result_metric across param_x and param_y. 
+
     Parameters:
     - results (list): The output from parameter_scan.
     - param_x (str): Name of the first parameter.
     - param_y (str): Name of the second parameter.
-    - result_metric (str): The result metric to optimize (maximize for accuracy, minimize for loss/error).
+    - result_metric (str): The result metric to use for coloring the heatmap.
     - save_path (str, optional): If provided, saves the figure as a PNG.
+    - invert_colors (bool, optional): If True, reverses the colormap.
+    - log_scale (bool, optional): If True, applies a logarithmic scale to the colormap.
+    - ignored_keys (list, optional): List of keys to ignore when determining fixed parameters.
+    - If overall=True: restricts to configs matching the best global setting
+    - If overall=False: uses all experiments and picks best (mean) value for each (x, y)
+    Adds ±SEM annotation if multiple reps per config.
+
+
     """
     ignored_keys = ignored_keys or []
-    
-    # determine if we minimize or maximize the result metric
     is_loss = "loss" in result_metric.lower() or "error" in result_metric.lower()
-
-    # find the best experiment and its parameters
-    best_exp_index = min(range(len(results)), key=lambda i: min(results[i]['results'][result_metric])) if is_loss else \
-                     max(range(len(results)), key=lambda i: max(results[i]['results'][result_metric]))
-
-    best_exp = results[best_exp_index]
-    best_params = best_exp['params']
-    best_value = min(best_exp['results'][result_metric]) if is_loss else max(best_exp['results'][result_metric])
-
-    print(f"Best configuration found: {best_params}, {result_metric}: {best_value} (Index: {best_exp_index})")
-
-    # prepare the data for the heatmap
     data = {}
-    
-    for exp in results:
-        # verify if the parameters are the same as the best parameters
-        if all(exp['params'][key] == best_params[key] for key in best_params if key not in [param_x, param_y]+ignored_keys):
-            x_val = exp['params'][param_x]
-            y_val = exp['params'][param_y]
-            metric_val = min(exp['results'][result_metric]) if is_loss else max(exp['results'][result_metric])
-            
-            if (x_val, y_val) not in data:
-                data[(x_val, y_val)] = metric_val
-            else:
-                data[(x_val, y_val)] = min(data[(x_val, y_val)], metric_val) if is_loss else max(data[(x_val, y_val)], metric_val)
-    
-    # build the heatmap matrix
+
+    if not overall:
+        # === Step 1: Identify best global configuration
+        best_exp_index = min(range(len(results)), key=lambda i: min(results[i]['results'][result_metric])) if is_loss else \
+                         max(range(len(results)), key=lambda i: max(results[i]['results'][result_metric]))
+        best_params = results[best_exp_index]['params']
+
+        # === Step 2: Filter and collect (x, y) values matching best fixed params
+        for exp in results:
+            if all(exp['params'][k] == best_params[k] for k in best_params if k not in [param_x, param_y] + ignored_keys):
+                x = exp['params'][param_x]
+                y = exp['params'][param_y]
+                values = exp['results'][result_metric]
+                mean_val = np.mean(values)
+                err_val = sem(values) if len(values) > 1 else 0.0
+                key = (x, y)
+                if key not in data or (is_loss and mean_val < data[key][0]) or (not is_loss and mean_val > data[key][0]):
+                    data[key] = (mean_val, err_val)
+
+    else:
+        # === Global max/min across ALL configs for each (x, y), regardless of other params
+        for exp in results:
+            if param_x not in exp['params'] or param_y not in exp['params']:
+                continue
+            x = exp['params'][param_x]
+            y = exp['params'][param_y]
+            values = exp['results'][result_metric]
+            mean_val = np.mean(values)
+            err_val = sem(values) if len(values) > 1 else 0.0
+            key = (x, y)
+            if key not in data or (is_loss and mean_val < data[key][0]) or (not is_loss and mean_val > data[key][0]):
+                data[key] = (mean_val, err_val)
+
+    # === Step 3: Build heatmap matrix
     x_values = sorted(set(k[0] for k in data.keys()))
     y_values = sorted(set(k[1] for k in data.keys()))
+    if invert_x:
+        x_values = list(reversed(x_values))
+    if invert_y:
+        y_values = list(reversed(y_values))
     heatmap_matrix = np.zeros((len(y_values), len(x_values)))
-    
-    for (x, y), value in data.items():
-        x_idx = x_values.index(x)
-        y_idx = y_values.index(y)
-        heatmap_matrix[y_idx, x_idx] = value
-    all_min_values = []
-    all_max_values = []
+    annot_matrix = np.empty_like(heatmap_matrix, dtype=object)
 
-    for fixed_index in range(len(results)):
-        fixed_params = results[fixed_index]['params']
-        
-        for exp in results:
-            if all(exp['params'][key] == fixed_params[key] for key in fixed_params if key not in [param_x, param_y]+ignored_keys):
-                values = exp['results'][result_metric]
-                all_min_values.append(min(values))
-                all_max_values.append(max(values))
+    for (x, y), (mean_val, err_val) in data.items():
+        xi = x_values.index(x)
+        yi = y_values.index(y)
+        heatmap_matrix[yi, xi] = mean_val
+        annot_matrix[yi, xi] = f"{mean_val:.4f}\n±{err_val:.4f}" if err_val > 0 else f"{mean_val:.4f}"
 
-    vmin = np.percentile(all_min_values, 5)
-    vmax = np.percentile(all_max_values, 95)
-    
-    # plot the heatmap
-    fig, ax = plt.subplots(figsize=(10, 7))
-    cmap = "coolwarm_r" if invert_colors else "coolwarm"
-    # Ensure positive values for log scale
+    # === Step 4: Plot
+    vmin = np.percentile([v[0] for v in data.values()], 5)
+    vmax = np.percentile([v[0] for v in data.values()], 95)
     if log_scale:
-        vmin = max(vmin, 1e-5)  # Avoid log(0) issues
-        vmax = max(vmax, vmin * 10)  # Ensure vmax is larger than vmin
-        norm = LogNorm(vmin=vmin, vmax=vmax)  # Apply log scale
+        vmin = max(vmin, 1e-5)
+        vmax = max(vmax, vmin * 10)
+        norm = LogNorm(vmin=vmin, vmax=vmax)
     else:
-        norm = None  # Use linear scale
+        norm = None
 
-    sns.heatmap(heatmap_matrix, vmin=vmin, vmax=vmax, xticklabels=[], yticklabels=[], annot=True, norm = norm, cmap=cmap, ax=ax, fmt=".4f", annot_kws={"size": 12})
+    fig, ax = plt.subplots(figsize=fig_size)
+    cmap = "coolwarm_r" if invert_colors else "coolwarm"
+    sns.heatmap(heatmap_matrix, annot=annot_matrix, fmt="", cmap=cmap,
+                xticklabels=[], yticklabels=[], norm=norm,
+                annot_kws={"size": 12}, ax=ax)
 
     def format_sci(v):
-        """Format the value in scientific notation only for very small or very large numbers"""
-        if abs(v) >= 1000 or (abs(v) < 0.01 and v != 0):
-            return f"{v:.1e}".replace("e+00", "").replace("e+0", "e").replace("e-0", "e-")
-        else:
-            return f"{v:.2f}".rstrip('0').rstrip('.')  # Remove trailing zeros and dots if needed
-
-    # Force scientific notation manually
-    x_labels_sci = [format_sci(v) for v in x_values]
-    y_labels_sci = [format_sci(v) for v in y_values]
+        return f"{v:.1e}".replace("e+00", "").replace("e+0", "e").replace("e-0", "e-") if abs(v) >= 1000 or (abs(v) < 0.01 and v != 0) else f"{v:.2f}".rstrip('0').rstrip('.')
 
     ax.set_xticks(np.arange(len(x_values)) + 0.5)
-    ax.set_xticklabels(x_labels_sci, rotation=45, ha="right", fontsize=12)
-
+    ax.set_xticklabels([format_sci(v) for v in x_values], rotation=45, ha="right", fontsize=12)
     ax.set_yticks(np.arange(len(y_values)) + 0.5)
-    ax.set_yticklabels(y_labels_sci, fontsize=12)
+    ax.set_yticklabels([format_sci(v) for v in y_values], fontsize=12)
 
     ax.set_xlabel(param_x)
     ax.set_ylabel(param_y)
-    ax.set_title(f"Heatmap of {result_metric} by {param_x} and {param_y}")
+    ax.set_title(f"Heatmap of {result_metric} by {param_x} and {param_y} ({'global best block' if overall else 'best per (x,y)'})")
     ax.tick_params(axis='both', labelsize=12)
 
-    # Save the plot if a save_path is provided
     if save_path:
         plt.savefig(f"{save_path}.png", bbox_inches="tight", dpi=300)
         print(f"Saved heatmap as {save_path}.png")
 
     plt.show()
 
+def enrich_params_with_data_points(results):
+    """
+    Adds 'num_data_points' = n * m * p * 0.5 to each experiment's params.
+    """
+    for exp in results:
+        n = exp['params']['n']
+        m = exp['params']['m']
+        p = exp['params']['p']
+        K = exp['params']['K']
+        exp['params']['num_data_points'] = n * m * p * 0.5 *K
+        # Round num_data_points to avoid float comparison issues
+        exp['params']['num_data_points'] = round(exp['params']['num_data_points'], 4)
+
+    return results
+
 # plot the heatmap for two selected parameters with a result metric
-def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index, ax=None, save_path="", log_scale=False, invert_colors=False, ignored_keys=None):
+def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index,
+                        save_path="", invert_colors=False, log_scale=False,
+                        ignored_keys=None, overall=True,
+                        invert_x=False, invert_y=False, ax=None):
     """
     Plots a heatmap of two chosen parameters against a selected result metric, with fixed values for other parameters.
 
@@ -273,6 +289,12 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index, ax
                 data[(x_val, y_val)] = ((prev_mean + mean_val)/2, (prev_err + err_val)/2)    
     x_values = sorted(set(k[0] for k in data.keys()))
     y_values = sorted(set(k[1] for k in data.keys()))
+    # Invert axis values if requested
+    if invert_x:
+        x_values = list(reversed(x_values))
+    if invert_y:
+        y_values = list(reversed(y_values))
+
     heatmap_matrix = np.zeros((len(y_values), len(x_values)))
     
     annot_matrix = np.empty_like(heatmap_matrix, dtype=object)
@@ -294,7 +316,8 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index, ax
         standalone_mode = True  # We created ax, so we're in standalone mode
 
     # Define color normalization (logarithmic only for colors, not values)
-    vmin, vmax = np.percentile(list(data.values()), [5, 95])  # Avoid extreme outliers
+    mean_vals = [mean for (mean, _) in data.values()]
+    vmin, vmax = np.percentile(mean_vals, [5, 95])
     if log_scale:
         vmin = max(vmin, 1e-5)  # Prevent log(0) errors
         vmax = max(vmax, vmin * 10)  # Ensure vmax is larger
@@ -376,7 +399,8 @@ def find_fixed_indices(results, param_x, param_y, ignored_keys=None):
 # plot all heatmaps
 def plot_all_heatmaps(results, param_x, param_y, result_metric,
                       fig_size=(12, 10), save_path="", invert_colors=False,
-                      log_scale=False, ignored_keys=None):
+                      log_scale=False, ignored_keys=None, max_ = False, overall=True,
+                      invert_x=False, invert_y=False, sub_plot=True):
     """
     Plots all heatmaps in a grid with the same color scale.
 
@@ -389,33 +413,41 @@ def plot_all_heatmaps(results, param_x, param_y, result_metric,
     - save_path (str, optional): If provided, saves the figure as a PNG.
     
     """
-    
+    # print(f"Plotting heatmaps for {param_x} and {param_y} with result metric: {result_metric}")
+    if max_:
+        print("Maximizing the result metric")
+        # override behavior: just call best-fixed version
+        plot_heatmap_best_fixed(
+            results,
+            param_x,
+            param_y,
+            result_metric,
+            save_path=save_path,
+            invert_colors=invert_colors,
+            log_scale=log_scale,
+            ignored_keys=ignored_keys,
+            overall=overall,
+            invert_x=invert_x,
+            invert_y=invert_y,
+            fig_size=fig_size
+        )
+        return
+    # print("Finding fixed indices...")
     all_indices = find_fixed_indices(results, param_x, param_y, ignored_keys=ignored_keys)
+    # print(f"Found {len(all_indices)} fixed indices.")
     plot_multiple_heatmaps(results, param_x, param_y, result_metric, all_indices,
-                           fig_size, save_path, invert_colors, log_scale, ignored_keys=ignored_keys)
+                           fig_size, save_path, invert_colors, log_scale, ignored_keys=ignored_keys, 
+                           invert_x=invert_x, invert_y=invert_y, sub_plot=sub_plot)
    
-
-
-def enrich_params_with_data_points(results):
-    """
-    Adds 'num_data_points' = n * m * p * 0.5 to each experiment's params.
-    """
-    for exp in results:
-        n = exp['params']['n']
-        m = exp['params']['m']
-        p = exp['params']['p']
-        exp['params']['num_data_points'] = n * m * p * 0.5
-        # Round num_data_points to avoid float comparison issues
-        exp['params']['num_data_points'] = round(exp['params']['num_data_points'], 4)
-
-    return results
 
 
 
 # plot multiple heatmaps in a grid with the same color scale
 def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
                            fixed_indices=None, fig_size=(12, 10), save_path="",
-                           invert_colors=False, log_scale=False, ignored_keys=None):
+                           invert_colors=False, log_scale=False, ignored_keys=None,
+                           invert_x=False, invert_y=False, sub_plot=True):
+
     """
     Plots multiple heatmaps in a grid with the same color scale.
 
@@ -428,22 +460,25 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
     - fig_size (tuple, optional): Size of the figure.
     - save_path (str, optional): If provided, saves the figure as a PNG.
     """
-    
+    # print(f"Plotting heatmaps for {param_x} and {param_y} with result metric: {result_metric}")
     
     ignored_keys = ignored_keys or []
-
+    
     if fixed_indices is None:
         fixed_indices = find_fixed_indices(results, param_x, param_y, ignored_keys=ignored_keys)
 
     if len(fixed_indices) == 1:
         plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_indices[0],
-                           save_path=save_path, log_scale=log_scale, invert_colors=invert_colors, ignored_keys=ignored_keys)
+                           save_path=save_path, log_scale=log_scale, invert_colors=invert_colors, ignored_keys=ignored_keys, invert_x=invert_x, invert_y=invert_y)
         return
     num_rows = len(fixed_indices) // 2 + (len(fixed_indices) % 2)  # Arrange subplots in a 2-column layout
     num_cols = 2  # Maximum 2 heatmaps per row
 
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=fig_size, constrained_layout=True)
-    axes = axes.flatten()  # Flatten in case of single row/column layout
+    if sub_plot:
+        fig, axes = plt.subplots(num_rows, num_cols, figsize=fig_size, constrained_layout=True)
+        axes = axes.flatten()
+    else:
+        axes = [None] * len(fixed_indices)
 
     fixed_params_list = [results[idx]['params'] for idx in fixed_indices]  # Extract fixed params for each plot
     # find the varying and constant keys
@@ -486,8 +521,17 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
                 mean_val = np.mean(values)
                 err_val = sem(values) if len(values) > 1 else 0.0
                 data[(x_val, y_val)] = (mean_val, err_val)
+
         x_values = sorted(set(k[0] for k in data.keys()))
         y_values = sorted(set(k[1] for k in data.keys()))
+        if invert_x:
+            x_values = list(reversed(x_values))
+        # print(f"Y-axis not inverted: {y_values}")
+        if invert_y:
+            y_values = list(reversed(y_values))
+            # print(f"Y-axis inverted: {y_values}")
+
+
         heatmap_matrix = np.zeros((len(y_values), len(x_values)))
         annot_matrix = np.empty_like(heatmap_matrix, dtype=object)
 
@@ -495,45 +539,51 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
             x_idx = x_values.index(x)
             y_idx = y_values.index(y)
             heatmap_matrix[y_idx, x_idx] = mean_val
-            if err_val > 0:
-                annot_matrix[y_idx, x_idx] = f"{mean_val:.3f}\n±{err_val:.3f}"
-            else:
-                annot_matrix[y_idx, x_idx] = f"{mean_val:.3f}"
+            annot_matrix[y_idx, x_idx] = f"{mean_val:.3f}\n±{err_val:.3f}" if err_val > 0 else f"{mean_val:.3f}"
 
         def format_sci(v):
-            """Format the value in scientific notation only for very small or very large numbers"""
             if abs(v) >= 1000 or (abs(v) < 0.01 and v != 0):
                 return f"{v:.1e}".replace("e+00", "").replace("e+0", "e").replace("e-0", "e-")
             else:
-                return f"{v:.2f}".rstrip('0').rstrip('.')  # Remove trailing zeros and dots if needed
+                return f"{v:.2f}".rstrip('0').rstrip('.')
 
-        # Force scientific notation manually
         x_labels_sci = [format_sci(v) for v in x_values]
         y_labels_sci = [format_sci(v) for v in y_values]
-
         cmap = "coolwarm_r" if invert_colors else "coolwarm"
 
-        # Plot heatmap
+        # Create axis if in individual mode
+        if not sub_plot:
+            fig, ax = plt.subplots(figsize=(8, 6))
+        else:
+            ax = axes[i]
+
         sns.heatmap(
-            heatmap_matrix, xticklabels=x_labels_sci, yticklabels=y_labels_sci, annot=annot_matrix, cmap=cmap,
-            ax=axes[i], vmin=vmin, vmax=vmax, norm=norm, fmt="", annot_kws={"size": 10}, cbar=i % 2 == 1
+            heatmap_matrix, xticklabels=x_labels_sci, yticklabels=y_labels_sci,
+            annot=annot_matrix, cmap=cmap, ax=ax, vmin=vmin, vmax=vmax,
+            norm=norm, fmt="", annot_kws={"size": 10}, cbar=True
         )
 
-
-        # Set titles and labels
         varying_params_str = ", ".join(f"{key}={fixed_params[key]}" for key in varying_keys)
+        ax.set_xlabel(param_x, fontsize=12)
+        ax.set_ylabel(param_y, fontsize=12)
+        ax.set_title(f"Heatmap with parameters:\n{varying_params_str}", fontsize=14)
 
-        # Set titles and labels
-        axes[i].set_xlabel(param_x, fontsize=12)
-        axes[i].set_ylabel(param_y, fontsize=12)
-        axes[i].set_title(f"Heatmap with parameters: \n{varying_params_str}", fontsize=14)
+        if not sub_plot and save_path:
+            suffix = "_".join(f"{key}_{fixed_params[key]}" for key in varying_keys)
+            filename = f"{save_path}_{suffix}.png"
+            plt.savefig(filename, bbox_inches="tight", dpi=300)
+            print(f"Saved heatmap as {filename}")
+            plt.close(fig)
+    # Remove unused axes if any (only in subplot mode)
+    if sub_plot and len(fixed_indices) < len(axes):
+        for j in range(len(fixed_indices), len(axes)):
+            fig.delaxes(axes[j])
 
-    # Save the plot if a path is provided
-    if save_path:
-        plt.savefig(f"{save_path}.png", bbox_inches="tight", dpi=300)
-        print(f"Saved heatmap as {save_path}.png")
-
-    plt.show()
+    if sub_plot:
+        if save_path:
+            plt.savefig(f"{save_path}.png", bbox_inches="tight", dpi=300)
+            print(f"Saved combined subplot figure as {save_path}.png")
+        plt.show()
 
 
 
@@ -661,7 +711,7 @@ from itertools import product
 def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
                           split_by=None, title="", grid=True, save_path=None,
                           ylim=None, log_scale_x=False, log_scale_y=False,
-                          sub_plot=True):
+                          sub_plot=True, max_overall=False):
     """
     Plots metrics vs a parameter, grouped and split by other hyperparameters.
     
@@ -730,7 +780,7 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
 
             _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                             metric_styles, color_cycle, split_key, split_by,
-                            title, grid, ylim, log_scale_x, log_scale_y)
+                            title, grid, ylim, log_scale_x, log_scale_y, max_overall=max_overall)
 
         # Hide unused subplots
         for j in range(num_plots, nrows * ncols):
@@ -762,9 +812,12 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
 
 def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     metric_styles, color_cycle, split_key, split_by,
-                    title, grid, ylim, log_scale_x, log_scale_y):
+                    title, grid, ylim, log_scale_x, log_scale_y,
+                    max_overall=False):
     """
     Internal helper: plots one panel (subplot or full figure).
+    If max_overall=True, selects the best value across all other hyperparameters
+    (except param_x, group_by, split_by).
     """
     from collections import defaultdict
     grouped = defaultdict(list)
@@ -775,23 +828,46 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
     color_map = {group: color_cycle[i % len(color_cycle)] for i, group in enumerate(grouped)}
 
     for group_key, exps in grouped.items():
-        exps_sorted = sorted(exps, key=lambda e: e['params'][param_x])
-        x_vals = []
+        # Aggregate by param_x
+        grouped_by_x = defaultdict(list)
+        for exp in exps:
+            x = exp['params'][param_x]
+            grouped_by_x[x].append(exp)
+
+        x_vals = sorted(grouped_by_x.keys())
         metric_vals = {metric: [] for metric in metrics}
         metric_errs = {metric: [] for metric in metrics}
 
-        for exp in exps_sorted:
-            x = exp['params'][param_x]
-            x_vals.append(x)
-
+        for x in x_vals:
+            exp_list = grouped_by_x[x]
             for metric in metrics:
-                values = exp['results'][metric]
-                if isinstance(values[0], list):
-                    values = [v[-1] for v in values]
-                mean_val = np.mean(values)
-                err_val = sem(values) if len(values) > 1 else 0.0
-                metric_vals[metric].append(mean_val)
-                metric_errs[metric].append(err_val)
+                # For max_overall: keep only the best mean value across configs with same x
+                best_mean = None
+                best_err = None
+                for exp in exp_list:
+                    values = exp['results'][metric]
+                    if isinstance(values[0], list):  # last epoch
+                        values = [v[-1] for v in values]
+                    mean_val = np.mean(values)
+                    err_val = sem(values) if len(values) > 1 else 0.0
+                    if best_mean is None or mean_val > best_mean:
+                        best_mean = mean_val
+                        best_err = err_val
+                if max_overall:
+                    metric_vals[metric].append(best_mean)
+                    metric_errs[metric].append(best_err)
+                else:
+                    # Average over all matching configs
+                    all_means = []
+                    all_errs = []
+                    for exp in exp_list:
+                        values = exp['results'][metric]
+                        if isinstance(values[0], list):
+                            values = [v[-1] for v in values]
+                        all_means.append(np.mean(values))
+                        all_errs.append(sem(values) if len(values) > 1 else 0.0)
+                    metric_vals[metric].append(np.mean(all_means))
+                    metric_errs[metric].append(np.mean(all_errs))
 
         for metric in metrics:
             style = metric_styles[metric]
@@ -814,3 +890,4 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
     if log_scale_y:
         ax.set_yscale("log")
     ax.legend()
+

@@ -94,6 +94,8 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
         stop = True  # 0 or 1 list → always True
     else:
         stop = all(len(v) == len(list_params[0]) for v in list_params)  # Vérify if all lists have the same length
+    
+    
 
     for key, value in param_dict.items():
         if not isinstance(value, (list, tuple)):
@@ -129,10 +131,12 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
                 n=params['n'], m=params['m'], d=params['d'], p=params['p'], 
                 s=params['s'], device=device, lr=params['lr'], 
                 weight_decay=params['weight_decay'], reps=params['reps'], num_epochs=params['num_epochs'], 
-                open_browser=open_browser, K=params['K'], d1 = param_set['d1']
+                open_browser=open_browser, K=params['K'], d1 = params['d1']
             )
             all_results.append({'params': params, 'results': results})
         return all_results
+    else:
+        raise ValueError("The linear scan is not possible because the parameters are not synchronized.")
 
 # Principal function to run the experiments
 def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1= None):
@@ -189,7 +193,7 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         test_loss, test_accuracy = evaluate_model(model, test_loader, device)
 
         # Step 8: Compute reconstruction error
-        reconstruction_error = compute_reconstruction_error(model, X, s)
+        reconstruction_error = compute_reconstruction_error(model, X)
 
         # Step 9: Compute ground truth metrics
         gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
@@ -452,7 +456,7 @@ def evaluate_model(model, test_loader, device):
     return test_loss / len(test_loader), accuracy
 
 # Reconstruction error
-def compute_reconstruction_error(model, X, scale):
+def compute_reconstruction_error(model, X):
     """
     Computes the reconstruction error of the matrix factorization model.
 
@@ -471,14 +475,11 @@ def compute_reconstruction_error(model, X, scale):
     # Center the reconstructed matrix by subtracting the mean of each row
     user_item_matrix -= torch.mean(user_item_matrix, dim=0, keepdim=True)
 
-    # Compute the ground truth user-item matrix
-    ground_truth_matrix = scale * X
-
     # Compute the Frobenius norm of the ground truth matrix
-    frobenius_norm = torch.norm(ground_truth_matrix, p="fro")
+    frobenius_norm = torch.norm(X, p="fro")
 
     # Compute Mean Squared Error (MSE)
-    reconstruction_error = F.mse_loss(user_item_matrix, ground_truth_matrix)
+    reconstruction_error = torch.norm(user_item_matrix - X, p = "fro")
 
     # Normalize MSE by the Frobenius norm
     normalized_error = reconstruction_error / frobenius_norm

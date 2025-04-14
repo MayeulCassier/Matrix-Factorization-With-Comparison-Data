@@ -31,8 +31,8 @@ def generate_embeddings(n, m, d, device="cpu"):
     U = ortho_group.rvs(dim=n)
     V = ortho_group.rvs(dim=m)
     
-    X = U @ S @ V.T * 500
-    mean_X = np.mean(X, axis=0)
+    X = U @ S @ V.T 
+    X = X * np.sqrt(n*m)/2  # Scale to have unit variance
     return torch.tensor(X, dtype=torch.float32, device=device)
 
 def generate_low_rank_matrix(n, m, d, rank, device="cpu"):
