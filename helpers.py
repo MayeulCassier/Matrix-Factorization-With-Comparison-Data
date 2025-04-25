@@ -51,7 +51,7 @@ The ouputs are stored in a dictionary in the format:
 ]
 """
 def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu', 
-                    lr=5e-4, weight_decay=5e-3, num_epochs=100, reps=5, open_browser=False, linear = False, K=1, d1 = None):
+                    lr=1e-3, weight_decay=1e-5, num_epochs=100, reps=5, open_browser=False, linear = False, K=1, d1 = None):
     """
     Runs experiments over multiple hyperparameter configurations.
     If a parameter is given as a list, it will iterate over all combinations.
@@ -139,72 +139,57 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
         raise ValueError("The linear scan is not possible because the parameters are not synchronized.")
 
 # Principal function to run the experiments
-def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1= None):
+def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1=None):
     """
-    Runs multiple experiments for matrix factorization with BTL preference data.
+    Runs multiple experiments for matrix factorization with clean BTL preference data.
+    Uses disjoint triplet splits to avoid overlap between train and test.
 
     Parameters:
-    - n (int): Number of users.
-    - m (int): Number of items.
-    - d (int): Latent dimension size.
-    - p (float): Proportion of user-item interactions used as datapoints.
-    - s (float): Scaling factor for preference scores.
-    - device (torch.device): The device where computations will occur.
-    - lr (float): Learning rate.
-    - weight_decay (float): Weight decay for regularization.
-    - reps (int): Number of repetitions for the experiment.
-    - num_epochs (int): Number of epochs for training.
-    - open_browser (bool): Whether to open TensorBoard in the default web browser.
-    - K (int): Number of labels per preference comparison.
+    - n, m, d, p, s, device, lr, weight_decay, reps, num_epochs, open_browser, K, d1: same as before.
 
     Returns:
-    - dict: Contains reconstruction errors, log likelihoods, accuracy,
-           ground truth log likelihoods, and ground truth accuracy.
+    - dict with metrics from all repetitions.
     """
     reconstruction_errors, log_likelihoods, accuracy = [], [], []
     gt_accuracy, gt_log_likelihoods, train_losses, val_losses = [], [], [], []
 
     for rep in range(reps):
-        # print(f"\n### Experiment {rep+1}/{reps} started... ###")
-        # Step 1: Generate embeddings
         if d1 is None:
             d1 = d
+
+        # Step 1: Generate ground truth matrix X (size n x m)
         X = generate_embeddings(n, m, d1, device)
 
-        # Step 2: Create preference dataset
-        dataset = BTLPreferenceDataset(X, int(n * m * p / 2), scale=s, K=K)
+        # Step 2: Generate triplets then split & label cleanly
+        num_triplets = int(n * m * p / 2)
+        train_loader, val_loader, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K)
 
-        # Step 3: Split dataset into train, validation, and test sets
-        train_loader, val_loader, test_loader = split_dataset(dataset, len(dataset))
-
-        # Step 4: Initialize the matrix factorization model
+        # Step 3: Initialize model and optimizer
         model = MatrixFactorization(n, m, d).to(device)
-
-        # Step 5: Define optimizer
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        # Step 6: Train the model and retrieve losses
-        t_losses, v_losses = train_model(model, train_loader, val_loader, optimizer, device, num_epochs=num_epochs,
-                                          is_last=(rep == reps-1), open_browser=open_browser)
+        # Step 4: Train the model
+        is_last = (rep == reps - 1)
+        t_losses, v_losses = train_model(
+            model, train_loader, val_loader, optimizer, device,
+            num_epochs=num_epochs, is_last=is_last, open_browser=open_browser
+        )
         train_losses.append(t_losses)
         val_losses.append(v_losses)
 
-        # Step 7: Evaluate the model on the test set
-        test_loss, test_accuracy = evaluate_model(model, test_loader, device)
-
-        # Step 8: Compute reconstruction error
-        reconstruction_error = compute_reconstruction_error(model, X)
-
-        # Step 9: Compute ground truth metrics
-        gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
-
-        reconstruction_errors.append(reconstruction_error)
+        # Step 5: Evaluate the model
+        test_loss, test_acc = evaluate_model(model, test_loader, device)
+        accuracy.append(test_acc)
         log_likelihoods.append(-test_loss)
-        accuracy.append(test_accuracy)
+
+        # Step 6: Compute reconstruction error
+        rec_error = compute_reconstruction_error(model, X)
+        reconstruction_errors.append(rec_error)
+
+        # Step 7: Ground truth evaluation
+        gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
         gt_log_likelihoods.append(-gt_loss)
         gt_accuracy.append(gt_acc)
-
-        # print(f"### Experiment {rep+1}/{reps} completed ###")
 
     return {
         "reconstruction_errors": reconstruction_errors,
@@ -216,74 +201,90 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         "val_losses": val_losses
     }
 
+
 ############################################
 # Structure here is: 
 ############################################
 class BTLPreferenceDataset(Dataset):
     """
-    Bradley-Terry-Luce (BTL) preference dataset for training matrix factorization models.
-
-    This dataset generates user-item preference comparisons based on the BTL model.
-
-    Parameters:
-    U (torch.Tensor): User embeddings matrix (size: n_users x d).
-    V (torch.Tensor): Item embeddings matrix (size: m_items x d).
-    num_datapoints (int): Number of preference samples to generate.
-    scale (float, optional): Scaling factor for preference scores (default: 1.0).
-    K (int, optional): Number of labels per preference comparison (default: 1).
-
-    Methods:
-    - generate_preferences(num_datapoints): Generates pairwise preference data.
-    - __len__(): Returns the number of datapoints.
-    - __getitem__(idx): Retrieves a specific datapoint.
-
-    Returns:
-    - A PyTorch Dataset containing tuples (user_id, item_i, item_j, preference_label).
+    Dataset contenant des préférences BTL, générées à partir d'une liste de triplets (u, i, j)
+    avec K répétitions de labels tirés selon la probabilité sigmoïde.
     """
-
-    def __init__(self, X, num_datapoints, scale=1.0, K=1):
+    def __init__(self, triplets, X, scale=1.0, K=1):
         self.X = X
         self.scale = scale
-        self.data = self.generate_preferences(num_datapoints, K)
+        self.data = self._generate_labels(triplets, K)
 
-    def generate_preferences(self, num_datapoints, K=1):
-        """
-        Generates pairwise preferences based on the Bradley-Terry-Luce (BTL) model.
-
-        Parameters:
-        num_datapoints (int): Number of preference samples to generate.
-        K (int): Number of labels per preference comparison.
-
-        Returns:
-        list: A list of tuples (user_id, item_i, item_j, preference_label).
-        """
-        n, m = self.X.shape
+    def _generate_labels(self, triplets, K):
         data = []
-        for _ in range(num_datapoints):
-            # Randomly select a user and two distinct items
-            u = torch.randint(0, n, (1,)).item()
-            i, j = torch.randint(0, m, (2,)).tolist()
-            while i == j:
-                j = torch.randint(0, m, (1,)).item()
-
-            # Compute the preference score using the BTL model
+        for (u, i, j) in triplets:
             score = torch.sigmoid(self.scale * (self.X[u, i] - self.X[u, j]))
-            
-            # Generate K labels based on the score
             for _ in range(K):
                 label = torch.bernoulli(score).item()
                 data.append((u, i, j, label))
         return data
 
     def __len__(self):
-        """Returns the total number of datapoints in the dataset."""
         return len(self.data)
 
     def __getitem__(self, idx):
-        """Retrieves a specific preference datapoint."""
         return self.data[idx]
-    
 
+    
+def split_dataset_from_triplets(X, num_triplets, scale=1.0, K=1, train_ratio=0.8, val_ratio=0.1, batch_size=64):
+    """
+    Génère une liste de triplets uniques (u, i, j), fait un split, puis génère des datasets avec K labels.
+    Si le test set est trop petit (<500), il est complété automatiquement sans chevauchement avec train/val.
+    """
+
+    n, m = X.shape
+
+    # Génère les triplets (u, i, j) uniques
+    triplets = set()
+    while len(triplets) < num_triplets:
+        u = torch.randint(0, n, (1,)).item()
+        i, j = torch.randint(0, m, (2,)).tolist()
+        if i != j:
+            triplets.add((u, i, j))
+    triplets = list(triplets)
+
+    # Shuffle et split
+    total = len(triplets)
+    train_size = int(train_ratio * total)
+    val_size = int(val_ratio * total)
+    test_size = total - train_size - val_size
+
+    train_triplets, val_triplets, test_triplets = torch.utils.data.random_split(
+        triplets, [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+
+    # Vérifie et complète le test set si besoin
+    MIN_TEST_POINTS = 500
+    if len(test_triplets) * K < MIN_TEST_POINTS:
+        seen_triplets = set(train_triplets.indices + val_triplets.indices + test_triplets.indices)
+        seen_triplets = set([triplets[i] for i in seen_triplets])
+        needed = (MIN_TEST_POINTS + K - 1) // K - len(test_triplets)
+        extra = set()
+        while len(extra) < needed:
+            u = torch.randint(0, n, (1,)).item()
+            i, j = torch.randint(0, m, (2,)).tolist()
+            t = (u, i, j)
+            if i != j and t not in seen_triplets and t not in extra:
+                extra.add(t)
+        test_triplets = list(test_triplets) + list(extra)
+
+    # Génère les datasets
+    train_dataset = BTLPreferenceDataset(train_triplets, X, scale=scale, K=K)
+    val_dataset = BTLPreferenceDataset(val_triplets, X, scale=scale, K=K)
+    test_dataset = BTLPreferenceDataset(test_triplets, X, scale=scale, K=K)
+
+    # Crée les DataLoaders
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    return train_loader, val_loader, test_loader
 
 
 class MatrixFactorization(nn.Module):
@@ -365,7 +366,7 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
     """
     
     # Define logging directory for TensorBoard and reset previous logs
-    if is_last:
+    if False:
         log_dir = 'runs/matrix_factorization'
         start_tensorboard(log_dir=log_dir, open_browser=open_browser)
         writer = SummaryWriter(log_dir=log_dir)
@@ -406,10 +407,10 @@ def train_model(model, train_loader, val_loader, optimizer, device, num_epochs=1
         val_losses.append(val_loss)
     
         # Log validation loss to TensorBoard
-        if is_last:
+        if False:
             writer.add_scalars('Losses', {'train': train_loss, 
                               'val': val_loss}, epoch)
-    if is_last:
+    if False:
         writer.close()  # Close TensorBoard writer
     
     return train_losses, val_losses
@@ -530,40 +531,6 @@ def compute_ground_truth_metrics(test_loader, X, device):
 
 
 
-
-
-
-def split_dataset(dataset, num_datapoints, train_ratio=0.8, val_ratio=0.1, batch_size=64):
-    """
-    Splits a dataset into training, validation, and test sets and creates DataLoaders.
-    - Split by random_split
-
-    Parameters:
-    dataset (torch.utils.data.Dataset): The dataset to be split.
-    num_datapoints (int): Total number of datapoints in the dataset.
-    train_ratio (float, optional): Proportion of data to use for training (default: 0.8).
-    val_ratio (float, optional): Proportion of data to use for validation (default: 0.1).
-    batch_size (int, optional): Batch size for DataLoader (default: 64).
-
-    Returns:
-    tuple: DataLoaders for training, validation, and test sets.
-    """
-
-    # Compute dataset sizes for each split
-    train_size = int(train_ratio * num_datapoints)
-    val_size = int(val_ratio * num_datapoints)
-    test_size = num_datapoints - train_size - val_size  # Ensure all datapoints are used
-
-    # Split the dataset into train, validation, and test sets
-    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-
-    # Create DataLoaders for each dataset split
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    return train_loader, val_loader, test_loader
-
 def start_tensorboard(log_dir='runs/matrix_factorization', port=6006, open_browser=True):
     """Starts TensorBoard and opens it in the default web browser."""
     # Remove old logs
@@ -604,25 +571,23 @@ def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1):
     Returns:
     - tuple: Ground truth loss and accuracy.
     """
-    
     losses = []
     accuracies = []
 
     for _ in range(reps):
-        # Generate new embeddings
+        # Génère les embeddings
         X = generate_embeddings(n, m, d, device)
 
-        # Generate dataset
-        num_datapoints = int(n * m * p / 2)
-        dataset = BTLPreferenceDataset(X, num_datapoints, scale=s, K=K)
+        # Nombre de triplets à générer
+        num_triplets = int(n * m * p / 2)
 
-        # Split into train/val/test
-        _, _, test_loader = split_dataset(dataset, len(dataset))
+        # Utilise le split propre basé sur les triplets
+        _, _, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K)
 
-        # Evaluate ground truth
-        gt_loss, gt_accuracy = compute_ground_truth_metrics(test_loader, X, device)
+        # Évalue
+        gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
         losses.append(gt_loss)
-        accuracies.append(gt_accuracy)
+        accuracies.append(gt_acc)
 
     return losses, accuracies
 
