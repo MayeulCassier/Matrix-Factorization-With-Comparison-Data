@@ -12,6 +12,12 @@ import matplotlib.ticker as mticker
 from itertools import product
 from matplotlib.cm import get_cmap
 from collections import defaultdict
+import matplotlib
+matplotlib.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "text.latex.preamble": r"\usepackage{amsmath}"
+})
 
 
 ############################################
@@ -48,10 +54,16 @@ def format_display_name(name):
         "p": "p",
         "d": "Embedding Dim (d)",
         "d1": "Init Dim (d1)",
-        "K" : "Number of Comparisons k",
+        "K" : "k",
         "n": "n",
         "s": "s",
         "m": "m",
+        "norm_ratio": "$\|X^*\|/\|UV^T\|$",
+        "reconstruction_error_scaled": "Reconstruction Error (Scaled)",
+        "svd_error_scaled": "SVD Error (Scaled)",
+        "spearman_corr": "Spearman Correlation",
+        "pearson_corr": "Pearson Correlation",
+
     }
 
     if name in name_map:
@@ -93,12 +105,12 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
         formatted_params = format_params(exp['params'])
 
         plt.figure(figsize=(10, 5))
-        plt.plot(exp['results']['train_losses'][-1], label='Training Loss', linestyle='--')
-        plt.plot(exp['results']['val_losses'][-1], label='Validation Loss')
+        plt.plot(exp['results']['train_losses'][-1], label=r'Training Loss', linestyle='--')
+        plt.plot(exp['results']['val_losses'][-1], label=r'Validation Loss')
 
-        plt.xlabel("Epochs")
-        plt.ylabel("Loss")
-        plt.title(f"Train & Val Loss for\n{formatted_params}", fontsize=12)
+        plt.xlabel(r"Epochs")
+        plt.ylabel(r"Loss")
+        plt.title(rf"Train \& Val Loss for\\{formatted_params}", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.6)
         plt.legend()
         
@@ -135,7 +147,7 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
                 row = i // num_cols  
                 col = i % num_cols   
                 y_position = -0.07 - row * 0.05  # shift down for each row
-                plt.figtext(x_positions[col], y_position, text, color=color, fontsize=9, ha="left")
+                plt.figtext(x_positions[col], y_position, rf"$\text{{{text}}}$", color=color, fontsize=9, ha="left")
 
         # Plot all selected train losses
         plt.figure(figsize=(10, 5))
@@ -143,9 +155,9 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
             exp = results[exp_idx]
             plt.plot(exp['results']['train_losses'][-1], color=colors[i])
 
-        plt.xlabel("Epochs")
-        plt.ylabel("Train Loss")
-        plt.title(f"Losses for the parameter scan of the variables:\n {param_names}", fontsize=12)
+        plt.xlabel(r"Epochs")
+        plt.ylabel(r"Train Loss")
+        plt.title(rf"Losses for the parameter scan of the variables:\\ {param_names}", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.6)
         
         display_labels()  # print labels
@@ -161,9 +173,9 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
             exp = results[exp_idx]
             plt.plot(exp['results']['val_losses'][-1], color=colors[i])
 
-        plt.xlabel("Epochs")
-        plt.ylabel("Validation Loss")
-        plt.title(f"Losses for the parameter scan of the variables:\n {param_names}", fontsize=12)
+        plt.xlabel(r"Epochs")
+        plt.ylabel(r"Validation Loss")
+        plt.title(rf"Losses for the parameter scan of the variables:\\ {param_names}", fontsize=12)
         plt.grid(True, linestyle="--", alpha=0.6)
 
         display_labels()  # print labels
@@ -174,7 +186,7 @@ def plot_losses(results, param_index=None, selected_indices=None, save_path=""):
         plt.show()
 
 
-def plot_heatmap_best_fixed(results, param_x, param_y, result_metric, save_path="", invert_colors=False, log_scale=False, ignored_keys=None, overall=True, invert_x=False, invert_y=False, fig_size=(10, 7)):
+def plot_heatmap_best_fixed(results, param_x, param_y, result_metric, save_path="", invert_colors=False, log_scale=False, ignored_keys=None, overall=True, invert_x=False, invert_y=False, fig_size=(10, 7), font_scale=1):
     """
     Plots a heatmap of result_metric across param_x and param_y. 
 
@@ -257,22 +269,23 @@ def plot_heatmap_best_fixed(results, param_x, param_y, result_metric, save_path=
 
     fig, ax = plt.subplots(figsize=fig_size)
     cmap = "coolwarm_r" if invert_colors else "coolwarm"
-    sns.heatmap(heatmap_matrix, annot=annot_matrix, fmt="", cmap=cmap,
+    heatmap = sns.heatmap(heatmap_matrix, annot=annot_matrix, fmt="", cmap=cmap,
                 xticklabels=[], yticklabels=[], norm=norm,
-                annot_kws={"size": 12}, ax=ax)
-
+                annot_kws={"size": 12*font_scale}, ax=ax, cbar=True)
+    if heatmap.collections and heatmap.collections[0].colorbar:
+        heatmap.collections[0].colorbar.ax.tick_params(labelsize=font_scale*12)  # Adjust colorbar font size
     def format_sci(v):
         return f"{v:.1e}".replace("e+00", "").replace("e+0", "e").replace("e-0", "e-") if abs(v) >= 1000 or (abs(v) < 0.01 and v != 0) else f"{v:.2f}".rstrip('0').rstrip('.')
 
     ax.set_xticks(np.arange(len(x_values)) + 0.5)
-    ax.set_xticklabels([format_sci(v) for v in x_values], rotation=45, ha="right", fontsize=12)
+    ax.set_xticklabels([rf"{format_sci(v)}" for v in x_values], rotation=45, ha="right", fontsize=12*font_scale)
     ax.set_yticks(np.arange(len(y_values)) + 0.5)
-    ax.set_yticklabels([format_sci(v) for v in y_values], fontsize=12)
+    ax.set_yticklabels([rf"{format_sci(v)}" for v in y_values], fontsize=12*font_scale)
 
-    ax.set_xlabel(format_display_name(param_x))
-    ax.set_ylabel(format_display_name(param_y))
-    ax.set_title(f"Heatmap of {format_display_name(result_metric)} by {format_display_name(param_x)} and {format_display_name(param_y)} ({'global best block' if overall else 'best per (x,y)'})")
-    ax.tick_params(axis='both', labelsize=12)
+    ax.set_xlabel(rf"{format_display_name(param_x)}", font_size=14*font_scale)
+    ax.set_ylabel(rf"{format_display_name(param_y)}", font_size=14*font_scale)
+    ax.set_title(rf"Heatmap of {format_display_name(result_metric)} by {format_display_name(param_x)} and {format_display_name(param_y)} ({'global best block' if overall else 'best per (x,y)'})", fontsize=16*font_scale)
+    ax.tick_params(axis='both', labelsize=12*font_scale)
 
     if save_path:
         plt.savefig(f"{save_path}.png", bbox_inches="tight", dpi=300)
@@ -299,7 +312,7 @@ def enrich_params_with_data_points(results):
 def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index,
                         save_path="", invert_colors=False, log_scale=False,
                         ignored_keys=None, overall=True,
-                        invert_x=False, invert_y=False, ax=None):
+                        invert_x=False, invert_y=False, ax=None, font_scale=1):
     """
     Plots a heatmap of two chosen parameters against a selected result metric, with fixed values for other parameters.
 
@@ -373,13 +386,13 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index,
     cmap = "coolwarm_r" if invert_colors else "coolwarm"
 
     # Plot the heatmap with optional log color scale
-    sns.heatmap(heatmap_matrix, cmap=cmap, norm=norm, ax=ax,
-                annot=annot_matrix, fmt='', annot_kws={"size": 12})
+    heatmap = sns.heatmap(heatmap_matrix, cmap=cmap, norm=norm, ax=ax,
+                annot=annot_matrix, fmt='', annot_kws={"size": 12*font_scale}, cbar=True)
 
     # Set labels and title
-    ax.set_xlabel(format_display_name(param_x), fontsize=14)
-    ax.set_ylabel(format_display_name(param_y), fontsize=14)
-    ax.set_title(f"Heatmap of {format_display_name(result_metric)} by {format_display_name(param_x)} and {format_display_name(param_y)}")
+    ax.set_xlabel(format_display_name(param_x), fontsize=14*font_scale)
+    ax.set_ylabel(format_display_name(param_y), fontsize=14*font_scale)
+    ax.set_title(f"Heatmap of {format_display_name(result_metric)} by {format_display_name(param_x)} and {format_display_name(param_y)}", fontsize=16*font_scale)
 
     def format_sci(v):
         """Format the value in scientific notation only for very small or very large numbers"""
@@ -387,19 +400,20 @@ def plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_index,
             return f"{v:.1e}".replace("e+00", "").replace("e+0", "e").replace("e-0", "e-")
         else:
             return f"{v:.2f}".rstrip('0').rstrip('.')  # Remove trailing zeros and dots if needed
-
+    if heatmap.collections and heatmap.collections[0].colorbar:
+        heatmap.collections[0].colorbar.ax.tick_params(labelsize=font_scale*12)  # Adjust colorbar font size
     
     # Format labels in scientific notation
     x_labels_sci = [format_sci(v) for v in x_values]
     y_labels_sci = [format_sci(v) for v in y_values]
 
     ax.set_xticks(np.arange(len(x_values)) + 0.5)  
-    ax.set_xticklabels(x_labels_sci, rotation=45, ha="right", fontsize=12)
+    ax.set_xticklabels(rf"{x_labels_sci}", rotation=45, ha="right", fontsize=12*font_scale)
 
     ax.set_yticks(np.arange(len(y_values)) + 0.5)
-    ax.set_yticklabels(y_labels_sci, fontsize=12)
+    ax.set_yticklabels(rf"{y_labels_sci}", fontsize=12*font_scale)
 
-    ax.tick_params(axis='both', labelsize=12)
+    ax.tick_params(axis='both', labelsize=12*font_scale)
 
     # Save the plot if we're in standalone mode
     if standalone_mode and save_path:
@@ -444,7 +458,7 @@ def find_fixed_indices(results, param_x, param_y, ignored_keys=None):
 def plot_all_heatmaps(results, param_x, param_y, result_metric,
                       fig_size=(12, 10), save_path="", invert_colors=False,
                       log_scale=False, ignored_keys=None, max_ = False, overall=True,
-                      invert_x=False, invert_y=False, sub_plot=True):
+                      invert_x=False, invert_y=False, sub_plot=True, font_scale=1):
     """
     Plots all heatmaps in a grid with the same color scale.
 
@@ -473,7 +487,8 @@ def plot_all_heatmaps(results, param_x, param_y, result_metric,
             overall=overall,
             invert_x=invert_x,
             invert_y=invert_y,
-            fig_size=fig_size
+            fig_size=fig_size,
+            font_scale=font_scale
         )
         return
     # print("Finding fixed indices...")
@@ -481,7 +496,7 @@ def plot_all_heatmaps(results, param_x, param_y, result_metric,
     # print(f"Found {len(all_indices)} fixed indices.")
     plot_multiple_heatmaps(results, param_x, param_y, result_metric, all_indices,
                            fig_size, save_path, invert_colors, log_scale, ignored_keys=ignored_keys, 
-                           invert_x=invert_x, invert_y=invert_y, sub_plot=sub_plot)
+                           invert_x=invert_x, invert_y=invert_y, sub_plot=sub_plot, font_scale=font_scale)
    
 
 
@@ -490,7 +505,7 @@ def plot_all_heatmaps(results, param_x, param_y, result_metric,
 def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
                            fixed_indices=None, fig_size=(12, 10), save_path="",
                            invert_colors=False, log_scale=False, ignored_keys=None,
-                           invert_x=False, invert_y=False, sub_plot=True):
+                           invert_x=False, invert_y=False, sub_plot=True, font_scale=1):
 
     """
     Plots multiple heatmaps in a grid with the same color scale.
@@ -513,7 +528,7 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
 
     if len(fixed_indices) == 1:
         plot_heatmap_fixed(results, param_x, param_y, result_metric, fixed_indices[0],
-                           save_path=save_path, log_scale=log_scale, invert_colors=invert_colors, ignored_keys=ignored_keys, invert_x=invert_x, invert_y=invert_y)
+                           save_path=save_path, log_scale=log_scale, invert_colors=invert_colors, ignored_keys=ignored_keys, invert_x=invert_x, invert_y=invert_y, font_scale=font_scale)
         return
     num_rows = len(fixed_indices) // 2 + (len(fixed_indices) % 2)  # Arrange subplots in a 2-column layout
     num_cols = 2  # Maximum 2 heatmaps per row
@@ -591,8 +606,8 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
             else:
                 return f"{v:.2f}".rstrip('0').rstrip('.')
 
-        x_labels_sci = [format_sci(v) for v in x_values]
-        y_labels_sci = [format_sci(v) for v in y_values]
+        x_labels_sci = [rf"{format_sci(v)}" for v in x_values]
+        y_labels_sci = [rf"{format_sci(v)}" for v in y_values]
         cmap = "coolwarm_r" if invert_colors else "coolwarm"
 
         # Create axis if in individual mode
@@ -601,16 +616,19 @@ def plot_multiple_heatmaps(results, param_x, param_y, result_metric,
         else:
             ax = axes[i]
 
-        sns.heatmap(
+        heatmap = sns.heatmap(
             heatmap_matrix, xticklabels=x_labels_sci, yticklabels=y_labels_sci,
             annot=annot_matrix, cmap=cmap, ax=ax, vmin=vmin, vmax=vmax,
-            norm=norm, fmt="", annot_kws={"size": 10}, cbar=True
+            norm=norm, fmt="", annot_kws={"size": 10*font_scale}, cbar=True
         )
+        if heatmap.collections and heatmap.collections[0].colorbar:
+            heatmap.collections[0].colorbar.ax.tick_params(labelsize=font_scale*12)
 
         varying_params_str = ", ".join(f"{format_display_name(key)}={fixed_params[key]}" for key in varying_keys)
-        ax.set_xlabel(format_display_name(param_x), fontsize=12)
-        ax.set_ylabel(format_display_name(param_y), fontsize=12)
-        ax.set_title(f"Heatmap with parameters:\n{varying_params_str}", fontsize=14)
+        ax.set_xlabel(rf"{format_display_name(param_x)}", fontsize=12*font_scale)
+        ax.set_ylabel(rf"{format_display_name(param_y)}", fontsize=12*font_scale)
+        ax.tick_params(axis='both', labelsize=12*font_scale)
+        ax.set_title(rf"Heatmap with parameters:\n{varying_params_str}", fontsize=14*font_scale)
 
         if not sub_plot and save_path:
             suffix = "_".join(f"{key}_{fixed_params[key]}" for key in varying_keys)
@@ -675,7 +693,7 @@ def plot_3d_scatter(results, param_x, param_y, param_z, result_metric):
     
     # Use Plotly for interactive 3D scatter plot
     fig = px.scatter_3d(df, x=param_x, y=param_y, z=param_z, color=result_metric,
-                         title=f"3D Scatter of {format_display_name(result_metric)} by {format_display_name(param_x)}, {format_display_name(param_y)}, and {format_display_name(param_z)}",
+                         title=rf"3D Scatter of {format_display_name(result_metric)} by {format_display_name(param_x)}, {format_display_name(param_y)}, and {format_display_name(param_z)}",
                          labels={param_x: param_x, param_y: param_y, param_z: param_z, result_metric: result_metric},
                          opacity=0.8)
     fig.show()
@@ -783,7 +801,7 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
                           split_by=None, title="", grid=True, save_path=None,
                           ylim=None, log_scale_x=False, log_scale_y=False,
                           sub_plot=True, max_overall=False, show_plot=True, use_color_gradient=True,
-                          font_scale=1.0):
+                          font_scale=1.0, GT_plot=True, stds=None):
     """
     Plots metrics vs a parameter, grouped and split by other hyperparameters.
     
@@ -807,6 +825,9 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
         split_by = [split_by]
     group_by = group_by or []
     split_by = split_by or []
+    if isinstance(metrics, str):
+        metrics = [metrics]
+    
 
     # Define styles per metric
     markers = ['o', 's', 'D', '^', 'v', 'x']
@@ -853,7 +874,7 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
             _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                             metric_styles, color_cycle, split_key, split_by,
                             title, grid, ylim, log_scale_x, log_scale_y, max_overall=max_overall, 
-                            use_color_gradient=use_color_gradient, font_scale=font_scale)
+                            use_color_gradient=use_color_gradient, font_scale=font_scale, GT_plot=GT_plot, stds=stds)
             
             
             format_ticks_smart(ax, 'x')
@@ -878,7 +899,7 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
             _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                             metric_styles, plt.cm.tab10(np.linspace(0, 1, 10)),
                             split_key, split_by, title, grid, ylim, log_scale_x, log_scale_y, 
-                            use_color_gradient=use_color_gradient, max_overall=max_overall, font_scale=font_scale)
+                            use_color_gradient=use_color_gradient, max_overall=max_overall, font_scale=font_scale, GT_plot=GT_plot)
             
             format_ticks_smart(ax, 'x')
 
@@ -898,7 +919,7 @@ def plot_metrics_vs_param(results, param_x, metrics, group_by=None,
 def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     metric_styles, color_cycle, split_key, split_by,
                     title, grid, ylim, log_scale_x, log_scale_y,
-                    max_overall=False, use_color_gradient=False, font_scale=1.0):
+                    max_overall=False, use_color_gradient=False, font_scale=1.0, GT_plot=True, stds = None):
     """
     Internal helper: plots one panel (subplot or full figure).
     If max_overall=True, selects the best value across all other hyperparameters
@@ -933,11 +954,21 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                 best_err = None
                 for exp in exp_list:
                     values = exp['results'][metric]
-                    if isinstance(values[0], list):
-                        values = [v[-1] for v in values]
+                    # Handle metrics that are single float vs list of floats vs list of lists
+                    if isinstance(values, list) and len(values) > 0:
+                        if isinstance(values[0], list):  # list of lists → take last value of each
+                            values = [v[-1] for v in values]
+                        # else: list of floats → use as is
+                    elif isinstance(values, float):  # single float → wrap
+                        values = [values]
+
                     mean_val = np.mean(values)
-                    err_val = sem(values) if len(values) > 1 else 0.0
-                    if best_mean is None or mean_val > best_mean:
+                    if stds is not None:
+                        err_val = np.mean(exp['results'][stds])
+                    else:
+                        err_val = sem(values) if len(values) > 1 else 0.0
+                    is_loss = "loss" in metric.lower() or "error" in metric.lower()
+                    if best_mean is None or (is_loss and mean_val < best_mean) or (not is_loss and mean_val > best_mean):
                         best_mean = mean_val
                         best_err = err_val
                 if max_overall:
@@ -948,8 +979,12 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     all_errs = []
                     for exp in exp_list:
                         values = exp['results'][metric]
-                        if isinstance(values[0], list):
-                            values = [v[-1] for v in values]
+                        if isinstance(values, list) and len(values) > 0:
+                            if isinstance(values[0], list):  # list of lists → take last value of each
+                                values = [v[-1] for v in values]
+                            # else: list of floats → use as is
+                        elif isinstance(values, float):  # single float → wrap
+                            values = [values]
                         all_means.append(np.mean(values))
                         all_errs.append(sem(values) if len(values) > 1 else 0.0)
                     metric_vals[metric].append(np.mean(all_means))
@@ -974,7 +1009,7 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     yerr=metric_errs[metric],
                     fmt=style['marker'] + style['linestyle'],
                     capsize=5,
-                    label=label,
+                    label=rf"{label}",
                     color=color_map[group_key]
                 )
             else:
@@ -983,16 +1018,21 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     x_vals,
                     metric_vals[metric],
                     style['marker'] + style['linestyle'],
-                    label=label,
+                    label=rf"{label}",
                     color=color_map[group_key]
                 )
 
 
     split_label = ", ".join(f"{format_display_name(k)}={v}" for k, v in split_key) if split_by else ""
     full_title = f"{title}\n{split_label}" if split_label else title
-    ax.set_title(full_title, fontsize=14 * font_scale)
-    ax.set_xlabel(format_display_name(param_x), fontsize=12 * font_scale)
-    ax.set_ylabel(", ".join(format_display_name(metrics)) if len(metrics) > 1 else format_display_name(metrics[0]),fontsize=12 * font_scale)
+    ax.set_title(rf"{full_title}", fontsize=14 * font_scale)
+    ax.set_xlabel(rf"{format_display_name(param_x)}", fontsize=12 * font_scale)
+    ax.set_ylabel(
+        rf"{', '.join(format_display_name(m) for m in metrics)}" if len(metrics) > 1 
+        else rf"{format_display_name(metrics[0])}",
+        fontsize=12 * font_scale
+    )
+
     if grid:
         ax.grid(True, linestyle="--", alpha=0.6)
     if ylim:
@@ -1002,9 +1042,8 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
     if log_scale_y:
         ax.set_yscale("log")
     ax.tick_params(axis='both', labelsize=11 * font_scale)
-    ax.legend(fontsize=11 * font_scale)    
     # === Ajouter Ground Truth Accuracy (courbe grise) si pertinent ===
-    if metrics == ["accuracy"]:
+    if (metrics == ["accuracy"]) and GT_plot:
         # Trouve la plus grande valeur de K
         K_vals = [exp['params'].get('K') for exp in group_results if 'K' in exp['params']]
         if K_vals:
@@ -1019,6 +1058,7 @@ def _plot_one_panel(ax, group_results, param_x, metrics, group_by,
                     gt_y.append(gt_avg)
 
             if gt_x and gt_y:
-                ax.plot(gt_x, gt_y, linestyle="--", color="gray", label=f"Ground Truth (k={max_K})")
+                ax.plot(gt_x, gt_y, linestyle="--", color="gray", label=r"GT")
+    ax.legend(fontsize=11 * font_scale)    
 
 

@@ -12,6 +12,9 @@ import subprocess
 import webbrowser
 import itertools
 from generation_data import *
+import pickle
+from scipy.stats import spearmanr
+
 
 ############################################
 # This file contains Helper functions for matrix factorization
@@ -50,8 +53,9 @@ The ouputs are stored in a dictionary in the format:
             ...
 ]
 """
-def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu', 
-                    lr=1e-3, weight_decay=1e-5, num_epochs=100, reps=5, open_browser=False, linear = False, K=1, d1 = None):
+def parameter_scan(n=1000, m=1000, d=2, p=0.5, s=1.0, device='cpu', 
+                    lr=1e-3, weight_decay=1e-5, num_epochs=30, reps=1, strategy = "random", open_browser=False, linear = False, K=1, d1 = None, 
+                    save_path=None, save_every=None, popularity_method="zipf", alpha=1.5, soft_label=False):
     """
     Runs experiments over multiple hyperparameter configurations.
     If a parameter is given as a list, it will iterate over all combinations.
@@ -78,7 +82,10 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     
     # Convert scalar values to lists for iteration
     param_dict = {'n': n, 'm': m, 'd': d, 'p': p, 'lr': lr, 
-                  'weight_decay': weight_decay, 'num_epochs': num_epochs, 'reps': reps, 's': s, 'K': K, 'd1': d1}
+                  'weight_decay': weight_decay, 'num_epochs': num_epochs,
+                  'reps': reps, 's': s, 'K': K, 'd1': d1, 'strategy': strategy,
+                  'popularity_method': popularity_method, 'alpha': alpha, 
+                  'soft_label': soft_label}
     param_dict = {
         k: list(v) if isinstance(v, np.ndarray) else
            [float(x) if isinstance(x, (np.float32, np.float64)) else int(x) if isinstance(x, np.integer) else x for x in v] 
@@ -100,14 +107,18 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
     for key, value in param_dict.items():
         if not isinstance(value, (list, tuple)):
             param_dict[key] = [value]  # Wrap single values in a list
+    # Optional: Clear the existing file if it exists
+    if save_path and os.path.exists(save_path):
+        print(f"🧹 Removing existing file at {save_path}")
+        os.remove(save_path)
+
     if not linear:
         # Generate all combinations of hyperparameters
         param_combinations = list(itertools.product(*param_dict.values()))
         
         # Store results
         all_results = []
-        
-        for params in param_combinations:
+        for experiment_index, params in enumerate(param_combinations):
             param_set = dict(zip(param_dict.keys(), params))
             print(f"\nRunning experiment with parameters: {param_set}")
             
@@ -115,10 +126,39 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
                 n=param_set['n'], m=param_set['m'], d=param_set['d'], p=param_set['p'], 
                 s=param_set['s'], device=device, lr=param_set['lr'], 
                 weight_decay=param_set['weight_decay'], reps=param_set['reps'], num_epochs=param_set['num_epochs'], 
-                open_browser=open_browser, K=param_set['K'], d1 = param_set['d1']
+                open_browser=open_browser, K=param_set['K'], d1 = param_set['d1'], strategy=param_set['strategy'],
+                popularity_method=param_set['popularity_method'], alpha=param_set['alpha'], soft_label= param_set['soft_label']
             )
-            
             all_results.append({'params': param_set, 'results': results})
+            if save_path and save_every and (len(all_results) >= save_every):
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                if os.path.exists(save_path):
+                    with open(save_path, 'rb') as f:
+                        previous_results = pickle.load(f)
+                else:
+                    previous_results = []
+
+                previous_results.extend(all_results)
+                with open(save_path, 'wb') as f:
+                    pickle.dump(previous_results, f)
+
+                print(f"✅ Saved {len(all_results)} new experiments to {save_path}")
+                all_results = []  # On nettoie la mémoire
+        
+        if save_path and len(all_results) > 0:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            if os.path.exists(save_path):
+                with open(save_path, 'rb') as f:
+                    previous_results = pickle.load(f)
+            else:
+                previous_results = []
+
+            previous_results.extend(all_results)
+            with open(save_path, 'wb') as f:
+                pickle.dump(previous_results, f)
+
+            print(f"✅ Saved {len(all_results)} new experiments to {save_path}")
+            all_results = []  # On nettoie la mémoire
         
         return all_results
     elif linear and stop:
@@ -131,15 +171,44 @@ def parameter_scan(n=100, m=200, d=3, p=0.5, s=2.0, device='cpu',
                 n=params['n'], m=params['m'], d=params['d'], p=params['p'], 
                 s=params['s'], device=device, lr=params['lr'], 
                 weight_decay=params['weight_decay'], reps=params['reps'], num_epochs=params['num_epochs'], 
-                open_browser=open_browser, K=params['K'], d1 = params['d1']
+                open_browser=open_browser, K=params['K'], d1 = params['d1'], strategy=params['strategy'],
+                popularity_method=params['popularity_method'], alpha=params['alpha'], soft_label= params['soft_label']
             )
             all_results.append({'params': params, 'results': results})
+            if save_path and save_every and (len(all_results) >= save_every):
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                if os.path.exists(save_path):
+                    with open(save_path, 'rb') as f:
+                        previous_results = pickle.load(f)
+                else:
+                    previous_results = []
+
+                previous_results.extend(all_results)
+                with open(save_path, 'wb') as f:
+                    pickle.dump(previous_results, f)
+
+                print(f"✅ Saved {len(all_results)} new experiments to {save_path}")
+                all_results = []  # On nettoie la mémoire
+        if save_path and len(all_results) > 0:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            if os.path.exists(save_path):
+                with open(save_path, 'rb') as f:
+                    previous_results = pickle.load(f)
+            else:
+                previous_results = []
+
+            previous_results.extend(all_results)
+            with open(save_path, 'wb') as f:
+                pickle.dump(previous_results, f)
+
+            print(f"✅ Saved {len(all_results)} new experiments to {save_path}")
+            all_results = []  # On nettoie la mémoire
         return all_results
     else:
         raise ValueError("The linear scan is not possible because the parameters are not synchronized.")
 
 # Principal function to run the experiments
-def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1=None):
+def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=100, open_browser=False, K=1, d1=None, strategy="random", popularity_method="zipf", alpha=1.5, soft_label=False):
     """
     Runs multiple experiments for matrix factorization with clean BTL preference data.
     Uses disjoint triplet splits to avoid overlap between train and test.
@@ -150,9 +219,14 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
     Returns:
     - dict with metrics from all repetitions.
     """
+    alpha_vals, norm_X_vals, norm_ratio_vals = [], [], []
+    recs_scaled, pearson_means, pearson_stds = [], [], []
+    spearman_means, spearman_stds, svd_errors = [], [], []
+
     reconstruction_errors, log_likelihoods, accuracy = [], [], []
     gt_accuracy, gt_log_likelihoods, train_losses, val_losses = [], [], [], []
-
+    if K < 5: 
+        soft_label = False  # No soft labels for K < 7
     for rep in range(reps):
         if d1 is None:
             d1 = d
@@ -162,7 +236,7 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
 
         # Step 2: Generate triplets then split & label cleanly
         num_triplets = int(n * m * p / 2)
-        train_loader, val_loader, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K)
+        train_loader, val_loader, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K, strategy=strategy, popularity_method=popularity_method, alpha=alpha, soft_label=soft_label)
 
         # Step 3: Initialize model and optimizer
         model = MatrixFactorization(n, m, d).to(device)
@@ -183,13 +257,27 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         log_likelihoods.append(-test_loss)
 
         # Step 6: Compute reconstruction error
-        rec_error = compute_reconstruction_error(model, X)
+        rec_error = compute_reconstruction_error(model, X, s)
         reconstruction_errors.append(rec_error)
 
+        # Step 6 bis: Compute alpha and norm ratios
+        alpha_val, norm_X_val, norm_ratio_val, rec_scaled, pearson_mean, pearson_std, spearman_mean, spearman_std, svd_err = compute_alpha_and_norm_ratios(model, X)
+
+        alpha_vals.append(alpha_val)
+        norm_X_vals.append(norm_X_val)
+        norm_ratio_vals.append(norm_ratio_val)
+        recs_scaled.append(rec_scaled)
+        pearson_means.append(pearson_mean)
+        pearson_stds.append(pearson_std)
+        spearman_means.append(spearman_mean)
+        spearman_stds.append(spearman_std)
+        svd_errors.append(svd_err)
         # Step 7: Ground truth evaluation
         gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
         gt_log_likelihoods.append(-gt_loss)
         gt_accuracy.append(gt_acc)
+
+        
 
     return {
         "reconstruction_errors": reconstruction_errors,
@@ -198,8 +286,18 @@ def run_experiment(n, m, d, p, s, device, lr, weight_decay, reps=5, num_epochs=1
         "gt_log_likelihoods": gt_log_likelihoods,
         "gt_accuracy": gt_accuracy,
         "train_losses": train_losses,
-        "val_losses": val_losses
+        "val_losses": val_losses,
+        "alpha": alpha_vals,
+        "norm_X": norm_X_vals,
+        "norm_ratio": norm_ratio_vals,
+        "reconstruction_error_scaled": recs_scaled,
+        "pearson_corr": pearson_means,
+        "pearson_std": pearson_stds,
+        "spearman_corr": spearman_means,
+        "spearman_std": spearman_stds,
+        "svd_error_scaled": svd_errors
     }
+
 
 
 ############################################
@@ -210,19 +308,28 @@ class BTLPreferenceDataset(Dataset):
     Dataset contenant des préférences BTL, générées à partir d'une liste de triplets (u, i, j)
     avec K répétitions de labels tirés selon la probabilité sigmoïde.
     """
-    def __init__(self, triplets, X, scale=1.0, K=1):
+    def __init__(self, triplets, X, scale=1.0, K=1, soft_label=False, train=False):
         self.X = X
         self.scale = scale
-        self.data = self._generate_labels(triplets, K)
+        self.soft_label = soft_label
+        self.data = self._generate_labels(triplets, K, train=train)
 
-    def _generate_labels(self, triplets, K):
+    def _generate_labels(self, triplets, K, train=False):
         data = []
         for (u, i, j) in triplets:
             score = torch.sigmoid(self.scale * (self.X[u, i] - self.X[u, j]))
-            for _ in range(K):
-                label = torch.bernoulli(score).item()
+            if self.soft_label and train:
+                # print("soft label")
+                # Use the mean of K Bernoulli samples as a soft label (i.e., the expected value)
+                label = torch.mean(torch.bernoulli(score.expand(K))).item()
                 data.append((u, i, j, label))
+            else:
+                # Use K separate samples with binary labels
+                for _ in range(K):
+                    label = torch.bernoulli(score).item()
+                    data.append((u, i, j, label))
         return data
+
 
     def __len__(self):
         return len(self.data)
@@ -230,56 +337,111 @@ class BTLPreferenceDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-    
-def split_dataset_from_triplets(X, num_triplets, scale=1.0, K=1, train_ratio=0.8, val_ratio=0.1, batch_size=64):
+def get_triplets_from_X(X, num_triplets, strategy="random", exclude=None,
+                        popularity_method="zipf", alpha=1.5, top_k=5, margin=0.1, n_clusters=10):
     """
-    Génère une liste de triplets uniques (u, i, j), fait un split, puis génère des datasets avec K labels.
-    Si le test set est trop petit (<500), il est complété automatiquement sans chevauchement avec train/val.
-    """
+    Generates a set of (u, i, j) triplets from matrix X using the specified strategy.
 
+    Parameters:
+    - X (Tensor): Ground-truth matrix of shape (n_users x n_items)
+    - num_triplets (int): Number of triplets to generate
+    - strategy (str): Strategy to use ("random", "proximity", "margin", "variance",
+                      "popularity", "top_k", "hard_negative", "cluster", "inverse")
+    - exclude (set): Set of triplets to avoid
+    - popularity_method (str): For "popularity" strategy ("zipf", "uniform", "exponential")
+    - alpha (float): Skew parameter for Zipf/exponential distributions
+    - top_k (int): k-value for top-k strategy
+    - margin (float or None): Threshold for margin-based sampling (if used)
+    - n_clusters (int): Number of clusters for cluster-based sampling
+
+    Returns:
+    - set of triplets (u, i, j)
+    """
+    exclude = exclude or set()
+
+    if strategy == "random":
+        candidates = choose_items_random(X, num_triplets=num_triplets, exclude=exclude)
+    elif strategy == "proximity":
+        candidates = choose_items_by_proximity(X, num_triplets, exclude)
+    elif strategy == "margin":
+        candidates = choose_items_by_margin(X, num_triplets, exclude, margin=margin)
+    elif strategy == "variance":
+        candidates = choose_items_by_variance(X, num_triplets, exclude)
+    elif strategy == "popularity":
+        candidates = choose_items_by_popularity(X, num_triplets, exclude,
+                                                method=popularity_method, alpha=alpha)
+    elif strategy == "top_k":
+        candidates = choose_items_top_k(X, num_triplets, exclude, k=top_k)
+    elif strategy == "cluster":
+        candidates = choose_items_cluster_based(X, num_triplets, exclude, n_clusters=n_clusters)
+    elif strategy == "user_similarity":
+        candidates = choose_items_by_user_similarity(X, num_triplets, exclude)
+    elif strategy == "svd":
+        candidates = choose_items_by_svd_projection(X, num_triplets, exclude)
+    else:
+        raise ValueError(f"Unknown triplet sampling strategy: {strategy}")
+
+    return set(candidates)
+
+
+
+
+def split_dataset_from_triplets(X, num_triplets, scale=1.0, K=1,
+                                 train_ratio=0.8, val_ratio=0.1,
+                                 batch_size=64, strategy="random",
+                                 popularity_method="zipf", alpha=1.5, soft_label=False):
+    """
+    Génère un dataset de triplets (u, i, j) selon une stratégie donnée, puis crée des DataLoaders
+    pour train / val / test avec étiquetage BTL. Complète le test set si trop petit.
+
+    Parameters:
+    - X (Tensor): Ground-truth matrix (n x m)
+    - num_triplets (int): Total number of triplets (u, i, j)
+    - scale (float): Scaling pour la proba sigmoïde
+    - K (int): Nombre de répétitions par triplet
+    - strategy (str): "random", "proximity", "variance", "popularity"
+    - popularity_method (str): Pour la stratégie "popularity"
+    - alpha (float): Skewness du Zipf/expo
+    """
     n, m = X.shape
 
-    # Génère les triplets (u, i, j) uniques
-    triplets = set()
-    while len(triplets) < num_triplets:
-        u = torch.randint(0, n, (1,)).item()
-        i, j = torch.randint(0, m, (2,)).tolist()
-        if i != j:
-            triplets.add((u, i, j))
-    triplets = list(triplets)
+    # Génération initiale
+    triplets = list(get_triplets_from_X(X, num_triplets, strategy=strategy,
+                                   popularity_method=popularity_method, alpha=alpha))
 
-    # Shuffle et split
+    # Split indices
     total = len(triplets)
     train_size = int(train_ratio * total)
     val_size = int(val_ratio * total)
     test_size = total - train_size - val_size
 
-    train_triplets, val_triplets, test_triplets = torch.utils.data.random_split(
+    train_split, val_split, test_split = torch.utils.data.random_split(
         triplets, [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42)
     )
 
-    # Vérifie et complète le test set si besoin
+    # Extraire les vrais triplets
+    train_triplets = [triplets[i] for i in train_split.indices]
+    val_triplets = [triplets[i] for i in val_split.indices]
+    test_triplets = [triplets[i] for i in test_split.indices]
+
+    # Complément si test set trop petit
     MIN_TEST_POINTS = 500
     if len(test_triplets) * K < MIN_TEST_POINTS:
-        seen_triplets = set(train_triplets.indices + val_triplets.indices + test_triplets.indices)
-        seen_triplets = set([triplets[i] for i in seen_triplets])
+        seen_triplets = set(train_triplets + val_triplets + test_triplets)
         needed = (MIN_TEST_POINTS + K - 1) // K - len(test_triplets)
-        extra = set()
-        while len(extra) < needed:
-            u = torch.randint(0, n, (1,)).item()
-            i, j = torch.randint(0, m, (2,)).tolist()
-            t = (u, i, j)
-            if i != j and t not in seen_triplets and t not in extra:
-                extra.add(t)
-        test_triplets = list(test_triplets) + list(extra)
+        extra = get_triplets_from_X(X, needed, strategy=strategy,
+                                    popularity_method=popularity_method, alpha=alpha,
+                                    exclude=seen_triplets)
+        test_triplets += list(extra)
 
-    # Génère les datasets
-    train_dataset = BTLPreferenceDataset(train_triplets, X, scale=scale, K=K)
-    val_dataset = BTLPreferenceDataset(val_triplets, X, scale=scale, K=K)
-    test_dataset = BTLPreferenceDataset(test_triplets, X, scale=scale, K=K)
+    # Création des datasets
+    train_dataset = BTLPreferenceDataset(train_triplets, X, scale=scale, K=K, soft_label = soft_label, train = True)
+    val_dataset = BTLPreferenceDataset(val_triplets, X, scale=scale, K=K, soft_label = soft_label)
+    test_dataset = BTLPreferenceDataset(test_triplets, X, scale=scale, K=K, soft_label = soft_label)
 
-    # Crée les DataLoaders
+
+    # Wrapping avec DataLoader
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -457,7 +619,7 @@ def evaluate_model(model, test_loader, device):
     return test_loss / len(test_loader), accuracy
 
 # Reconstruction error
-def compute_reconstruction_error(model, X):
+def compute_reconstruction_error(model, X, s):
     """
     Computes the reconstruction error of the matrix factorization model.
 
@@ -477,15 +639,89 @@ def compute_reconstruction_error(model, X):
     user_item_matrix -= torch.mean(user_item_matrix, dim=0, keepdim=True)
 
     # Compute the Frobenius norm of the ground truth matrix
-    frobenius_norm = torch.norm(X, p="fro")
+    frobenius_norm = torch.norm(s*X, p="fro")
 
     # Compute Mean Squared Error (MSE)
-    reconstruction_error = torch.norm(user_item_matrix - X, p = "fro")
+    reconstruction_error = torch.norm(user_item_matrix - s*X, p = "fro")
 
     # Normalize MSE by the Frobenius norm
     normalized_error = reconstruction_error / frobenius_norm
 
     return normalized_error.item()  # Return as a Python float
+
+def compute_alpha_and_norm_ratios(model, X):
+    """
+    Computes several alignment and structural comparison metrics between UVᵀ and X.
+
+    Returns:
+    - alpha (float): Best scalar multiplier for UVᵀ to align with X.
+    - norm_X (float): Frobenius norm of X.
+    - norm_ratio (float): ||UVᵀ||_F / ||X||_F
+    - reconstruction_error_scaled (float): Normalized error between alpha·UVᵀ and X.
+    - pearson_mean (float): Average Pearson correlation across rows.
+    - svd_error_scaled (float): ||α·S_hat - S_X|| / ||S_X||
+    """
+    with torch.no_grad():
+        UVT = torch.matmul(model.U, model.V.t())
+        dot_product = torch.sum(UVT * X)
+        norm_UVT = torch.norm(UVT, p="fro")
+        norm_X = torch.norm(X, p="fro")
+
+        alpha = dot_product / (norm_UVT ** 2 + 1e-8)
+        norm_ratio = norm_UVT / (norm_X + 1e-8)
+        reconstruction_error_scaled = torch.norm(alpha * UVT - X, p="fro") / (norm_X + 1e-8)
+
+        # === Pearson correlation mean per row ===
+        X_np = X.cpu().numpy()
+        UVT_np = UVT.cpu().numpy()
+        n = X_np.shape[0]
+        correlations = []
+        for i in range(n):
+            x_row = X_np[i, :]
+            u_row = UVT_np[i, :]
+            if np.std(x_row) > 1e-8 and np.std(u_row) > 1e-8:
+                corr = np.corrcoef(x_row, u_row)[0, 1]
+                correlations.append(corr)
+        pearson_mean = float(np.mean(correlations)) if correlations else 0.0
+
+        # === Comparison of singulat values ===
+        try:
+            U1, S1, V1 = torch.linalg.svd(X)
+            U2, S2, V2 = torch.linalg.svd(UVT)
+            k = min(len(S1), len(S2))
+            S_diff = alpha * S2[:k] - S1[:k]
+            svd_error_scaled = torch.norm(S_diff, p=2) / (torch.norm(S1[:k], p=2) + 1e-8)
+        except:
+            pearson_mean = 0.0
+            svd_error_scaled = 1.0
+        
+        # === mean Spearman correlation per row ===
+        spearman_scores = []
+        for i in range(n):
+            x_row = X_np[i, :]
+            u_row = UVT_np[i, :]
+            if np.std(x_row) > 1e-8 and np.std(u_row) > 1e-8:
+                rho, _ = spearmanr(x_row, u_row)
+                if not np.isnan(rho):
+                    spearman_scores.append(rho)
+        spearman_mean = float(np.mean(spearman_scores)) if spearman_scores else 0.0
+
+        pearson_std = float(np.std(correlations)) if correlations else 0.0
+        spearman_std = float(np.std(spearman_scores)) if spearman_scores else 0.0
+
+
+        return (
+            alpha.item(),
+            norm_X.item(),
+            norm_ratio.item(),
+            reconstruction_error_scaled.item(),
+            pearson_mean,
+            pearson_std,
+            spearman_mean,
+            spearman_std,
+            svd_error_scaled.item()
+        )
+
 
 # Ground truth metrics
 def compute_ground_truth_metrics(test_loader, X, device):
@@ -507,7 +743,7 @@ def compute_ground_truth_metrics(test_loader, X, device):
     with torch.no_grad():
         for batch in test_loader:
             u, i, j, z = [x.to(device) for x in batch]  # Move batch data to device
-
+            
             diff = X[u, i] - X[u, j]  # Compute item pairwise differences
 
             # Compute probability using sigmoid function
@@ -553,7 +789,7 @@ def start_tensorboard(log_dir='runs/matrix_factorization', port=6006, open_brows
 ############################################
 
 # test the function evaluate_ground_truth
-def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1):
+def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1, strategy="random", popularity_method="zipf", alpha=1.5 , soft_label=False):
     """
     Generates embeddings, creates preferences using BTLPreferenceDataset, 
     and computes ground truth accuracy and loss.
@@ -582,7 +818,7 @@ def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1):
         num_triplets = int(n * m * p / 2)
 
         # Utilise le split propre basé sur les triplets
-        _, _, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K)
+        _, _, test_loader = split_dataset_from_triplets(X, num_triplets, scale=s, K=K, strategy=strategy, popularity_method=popularity_method, alpha=alpha, soft_label=soft_label)
 
         # Évalue
         gt_loss, gt_acc = compute_ground_truth_metrics(test_loader, X, device)
@@ -592,7 +828,7 @@ def evaluate_ground_truth(n, m, p, d, s, device, K, reps=1):
     return losses, accuracies
 
 # parameter scan for ground truth
-def parameter_scan_ground_truth(n, m, p, d, s, device, K, linear=False, reps = 1):
+def parameter_scan_ground_truth(n, m, p, d, s, device, K, linear=False, reps = 1, strategy="random", popularity_method="zipf", alpha=1.5, soft_label=False):
     """
     Performs a parameter scan using evaluate_ground_truth, and returns results in a format
     compatible with visualization functions like heatmaps.
@@ -606,7 +842,7 @@ def parameter_scan_ground_truth(n, m, p, d, s, device, K, linear=False, reps = 1
     """
 
     # Convert scalar values into lists for iteration
-    param_dict = {'n': n, 'm': m, 'p': p, 'd': d, 's': s, 'K': K}
+    param_dict = {'n': n, 'm': m, 'p': p, 'd': d, 's': s, 'K': K, 'strategy': strategy, 'popularity_method': popularity_method, 'alpha': alpha, 'soft_label': soft_label}
     param_dict = {
         k: list(v) if isinstance(v, np.ndarray) else
            [float(x) if isinstance(x, (np.float32, np.float64)) else int(x) if isinstance(x, np.integer) else x for x in v] 
