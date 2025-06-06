@@ -1,14 +1,17 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "4"
+
 import torch # type: ignore
 import networkx as nx
 from sklearn.mixture import GaussianMixture
 from scipy.stats import ortho_group
 import numpy as np
 from sklearn.cluster import KMeans
-import os
-os.environ["OMP_NUM_THREADS"] = "4"
+
 ###########################################################
 # New triplet selection strategies
 ###########################################################
+
 # === RANDOM ===
 def choose_items_random(X, num_triplets, exclude):
     """Randomly sample i and j."""
@@ -22,7 +25,7 @@ def choose_items_random(X, num_triplets, exclude):
             triplets.add(t)
     return list(triplets)
 
-# === PROXIMITY ===
+# === PROXIMITY AKA MIN-MAX ===
 def choose_items_by_proximity(X, num_triplets, exclude, k=100):
     """Sample i and j with high user-item proximity."""
     n, m = X.shape
@@ -39,22 +42,48 @@ def choose_items_by_proximity(X, num_triplets, exclude, k=100):
             triplets.add(t)
     return list(triplets)
 
-# === MARGIN ===
-def choose_items_by_margin(X, num_triplets, exclude, margin=0.1):
-    """Sample i and j with a margin between their scores."""
+# === MARGIN AKA CLOSE-CALL ===
+def choose_items_by_margin(X, num_triplets, exclude, max_attempts=5000_000):
+    """
+    Sample i and j with a margin between their scores, adaptively adjusting the threshold.
+    This version uses NumPy for fast operations and batched attempts for efficiency.
+    """
     n, m = X.shape
+    exclude = exclude or set()
     triplets = set()
-    while len(triplets) < num_triplets:
-        u = torch.randint(0, n, (1,)).item()
-        scores = X[u]
-        i, j = torch.randint(0, m, (2,)).tolist()
-        if i != j and abs(scores[i] - scores[j]) <= margin:
-            t = (u, i, j)
-            if t not in exclude and t not in triplets:
-                triplets.add(t)
+
+    # === Compute adaptive margin using numpy (fast)
+    sample = X[:min(10, n)].cpu().numpy()
+    margin = np.mean(np.max(sample, axis=1) - np.min(sample, axis=1))*num_triplets/(n*m)
+
+    # === Prepare for efficient sampling
+    X_np = X.cpu().numpy()
+    rng = np.random.default_rng()
+
+    attempts = 0
+    while len(triplets) < num_triplets and attempts < max_attempts:
+        batch_size = 500  # Number of triplets to attempt at once
+        users = rng.integers(0, n, size=batch_size)
+        items = rng.integers(0, m, size=(batch_size, 2))
+
+        for u, (i, j) in zip(users, items):
+            if i == j:
+                continue
+            score_diff = abs(X_np[u, i] - X_np[u, j])
+            if score_diff <= margin:
+                t = (u, i, j)
+                if t not in triplets and t not in exclude:
+                    triplets.add(t)
+                    if len(triplets) >= num_triplets:
+                        break
+        attempts += batch_size
+
+    if len(triplets) < num_triplets:
+        print(f"⚠️ Only {len(triplets)} triplets generated (target={num_triplets}, margin={margin:.4f}) after {attempts} attempts.maximum : {np.max(X_np)}")
+
     return list(triplets)
 
-# === VARIANCE ===
+# === VARIANCE (Not used)===
 def choose_items_by_variance(X, num_triplets, exclude):
     """Sample i and j with high item variance across users."""
     n, m = X.shape
@@ -98,33 +127,108 @@ def choose_items_by_popularity(X, num_triplets, exclude, method="zipf", alpha=1.
             triplets.add(t)
     return list(triplets)
 
-# === TOP-K ===
-def choose_items_top_k(X, num_triplets, exclude, k=100):
-    """Choose i, j from top-k items of user u."""
+# === SVD ===
+def choose_items_by_svd_projection(X, num_triplets, exclude, rank=10, top_fraction=0.3):
+    """
+    Use truncated SVD to project users/items and sample (u, i, j)
+    from users and items with high singular vector magnitudes (importance in latent space).
+
+    Parameters:
+    - X (Tensor): input matrix (n_users x n_items)
+    - num_triplets (int): number of triplets to return
+    - exclude (set): set of triplets to avoid
+    - rank (int): number of top singular values to keep
+    - top_fraction (float): fraction of top users/items to keep based on projection norms
+    """
+    import scipy.sparse.linalg as spla
+    rank = int(num_triplets/(X.shape[0]*X.shape[1])* (np.max(X.shape)))
+    n, m = X.shape
+    X_np = X.cpu().numpy()
+
+    # Truncated SVD
+    U, S, Vt = spla.svds(X_np, k=rank)
+    U_proj = U @ np.diag(S)       # shape: (n x k)
+    V_proj = (np.diag(S) @ Vt).T  # shape: (m x k)
+
+    # Norms (importance) in latent space
+    user_norms = np.linalg.norm(U_proj, axis=1)
+    item_norms = np.linalg.norm(V_proj, axis=1)
+
+    # Select top users and items
+    num_top_users = max(1, int(top_fraction * n))
+    num_top_items = max(2, int(top_fraction * m))
+
+    top_users = np.argsort(user_norms)[-num_top_users:]
+    top_items = np.argsort(item_norms)[-num_top_items:]
+
+    # Sample triplets
+    triplets = set()
+    rng = np.random.default_rng()
+    for _ in range(num_triplets * 5):
+        u = int(rng.choice(top_users))
+        i, j = rng.choice(top_items, size=2, replace=False)
+        t = (u, i, j)
+        if i != j and t not in exclude and t not in triplets:
+            triplets.add(t)
+        if len(triplets) >= num_triplets:
+            break
+
+    if len(triplets) < num_triplets:
+        print(f"⚠️ Only {len(triplets)} triplets generated (target={num_triplets})")
+
+    return list(triplets)
+
+
+
+# === TOP-K AKA TOP_10% ===
+import math
+
+def estimate_k(num_triplets):
+    return math.ceil((1 + math.sqrt(1 + 8 * num_triplets)) / 2)
+
+def choose_items_top_k(X, num_triplets, exclude, k=None):
+    """
+    Choose (u, i, j) where i, j are among top-k items for user u.
+    If k is None, it is automatically chosen based on num_triplets.
+    """
     n, m = X.shape
     triplets = set()
-    for _ in range(num_triplets * 3):
+
+    # Compute k dynamically if not specified
+    if k is None:
+        k = min(m, max(5, int(0.1 * m)))
+        # Or alternatively:
+        # k = min(m, estimate_k(num_triplets))
+        # k = 500
+        # print("this is the k value", k)
+
+    for _ in range(num_triplets * 3):  # Over-generate
         u = torch.randint(0, n, (1,)).item()
         scores = X[u]
         topk = torch.topk(scores, k=k).indices.tolist()
-        # rest = list(set(range(m)) - set(topk))
-        # if not rest:
-        #     continue
+
         i = np.random.choice(topk)
         j = np.random.choice(topk)
         while i == j:
             j = np.random.choice(topk)
+
         t = (u, i, j)
         if t not in triplets and t not in exclude:
             triplets.add(t)
         if len(triplets) >= num_triplets:
             break
-    return list(triplets)
-    
 
-# === CLUSTER ===
+    if len(triplets) < num_triplets:
+        print(f"⚠️ Only {len(triplets)} triplets generated (target={num_triplets}, k={k})")
+
+    return list(triplets)
+
+import os
+
+# === CLUSTER (Not used) ===
 def choose_items_cluster_based(X, num_triplets, exclude, n_clusters=20):
     """Choose i, j from different clusters of items."""
+    
     n, m = X.shape
     triplets = set()
     item_vectors = X.T.numpy()
@@ -142,10 +246,12 @@ def choose_items_cluster_based(X, num_triplets, exclude, n_clusters=20):
             triplets.add(t)
     return list(triplets)
 
-def choose_items_by_user_similarity(X, num_triplets, exclude=None, max_attempts=10000, verbose=False):
+
+# === USER SIMILARITY (Not used) ===
+def choose_items_by_user_similarity(X, num_triplets, exclude=None, max_attempts=10000, verbose=False, fallback_random=False, error_if_incomplete=False):
     """
     Generate (u, i, j) triplets using user similarity and preference divergence.
-    The number of considered users, neighbors, and top-k items adapts to X and num_triplets.
+    Fallback to random sampling if not enough triplets are found.
 
     Args:
         X (Tensor): Preference matrix (n_users x n_items)
@@ -153,6 +259,8 @@ def choose_items_by_user_similarity(X, num_triplets, exclude=None, max_attempts=
         exclude (set): Triplets to exclude (optional)
         max_attempts (int): Max number of tries
         verbose (bool): If True, print progress
+        fallback_random (bool): Whether to complete with random triplets
+        error_if_incomplete (bool): Raise error instead of returning fewer triplets
 
     Returns:
         list of (u, i, j) triplets
@@ -167,16 +275,14 @@ def choose_items_by_user_similarity(X, num_triplets, exclude=None, max_attempts=
     exclude = exclude or set()
     rng = np.random.default_rng()
 
-    # === Adaptive parameters ===
     avg_triplets_per_user = num_triplets // n + 1
-    num_candidates = min(n, int(1.5 * n))  # explore ~all users
-    num_neighbors = min(20, max(3, num_triplets // n))  # dynamic #neighbors per user
-    top_k = max(3, min(m // 10, 10 + num_triplets // (5 * n)))  # adapt to m and density
+    num_candidates = min(n, int(1.5 * n))
+    num_neighbors = min(20, max(3, num_triplets // n))
+    top_k = max(3, min(m // 10, 10 + num_triplets // (5 * n)))
 
     if verbose:
         print(f"→ Adaptive config: top_k={top_k}, neighbors/user={num_neighbors}, target={num_triplets}")
 
-    # === Precompute top-k items ===
     top_k_items = {
         u: torch.topk(X[u], k=min(top_k, m)).indices.tolist()
         for u in range(n)
@@ -212,59 +318,28 @@ def choose_items_by_user_similarity(X, num_triplets, exclude=None, max_attempts=
         if verbose and attempts % 1000 == 0:
             print(f"{len(triplets)} triplets generated after {attempts} attempts.")
 
+    # === Fallback or error
+    if len(triplets) < num_triplets:
+        msg = f"⚠️ Only {len(triplets)} triplets generated (target={num_triplets}) after {attempts} attempts."
+        if error_if_incomplete:
+            raise RuntimeError(msg)
+        elif fallback_random:
+            from .helpers import choose_items_random  # or adapt import
+            needed = num_triplets - len(triplets)
+            extra = choose_items_random(X, needed, exclude=triplets.union(exclude))
+            triplets.update(extra)
+            if verbose:
+                print(f"🔁 Completed with {needed} random triplets.")
+        else:
+            print(msg)
+
     if verbose:
-        print(f"✅ Generated {len(triplets)} triplets (asked: {num_triplets}) in {attempts} attempts.")
-
+        print(f"✅ Returned {len(triplets)} triplets.")
     return list(triplets)
-
-
-
-
-def choose_items_by_svd_projection(X, num_triplets, exclude, rank=10, top_fraction=0.3):
-    """
-    Use truncated SVD to project users/items and sample (u, i, j)
-    from users and items with high singular vector magnitudes.
-
-    Parameters:
-    - X (Tensor): input matrix (n_users x n_items)
-    - num_triplets (int): number of triplets to return
-    - exclude (set): set of triplets to avoid
-    - rank (int): number of top singular values to keep
-    - top_fraction (float): fraction of top users/items to keep based on norm
-    """
-    import scipy.sparse.linalg as spla
-
-    n, m = X.shape
-    U, S, Vt = spla.svds(X.numpy(), k=rank)
-    user_proj = U @ np.diag(S)        # shape (n, rank)
-    item_proj = Vt.T                  # shape (m, rank)
-
-    # Select top users/items by projection norm (importance in latent space)
-    user_norms = np.linalg.norm(user_proj, axis=1)
-    item_norms = np.linalg.norm(item_proj, axis=1)
-
-    n_users_top = int(n * top_fraction)
-    n_items_top = int(m * top_fraction)
-
-    top_users = np.argsort(user_norms)[-n_users_top:]
-    top_items = np.argsort(item_norms)[-n_items_top:]
-
-    triplets = set()
-    for _ in range(num_triplets * 5):
-        u = int(np.random.choice(top_users))
-        i, j = np.random.choice(top_items, 2, replace=False)
-        t = (u, i, j)
-        if i != j and t not in triplets and t not in exclude:
-            triplets.add(t)
-        if len(triplets) >= num_triplets:
-            break
-
-    return list(triplets)
-
 
 
 ############################################
-# These Funtions create U and V with different structures
+# These Funtions create U^* and V^* with different structures (to create X^*)
 ############################################
 
 
@@ -294,6 +369,7 @@ def generate_embeddings(n, m, d, device="cpu"):
     X = X * np.sqrt(n*m)/2  # Scale to have unit variance
     return torch.tensor(X, dtype=torch.float32, device=device)
 
+
 def generate_low_rank_matrix(n, m, d, rank, device="cpu"):
     """
     Generates a low-rank matrix X = U diag(S) V^T with orthonormal U and V.
@@ -314,6 +390,48 @@ def generate_low_rank_matrix(n, m, d, rank, device="cpu"):
     
     return U, V, S
 
+
+def generate_clustered_matrix_from_embeddings(n, m, d, n_clusters=5, device="cpu", scale=1.0, shift_strength=0.5):
+    """
+    Generates a preference matrix X using base embeddings, then shifts item vectors
+    toward their cluster centroid while preserving individual variation.
+
+    Parameters:
+    - n (int): Number of users.
+    - m (int): Number of items.
+    - d (int): Latent dimension.
+    - n_clusters (int): Number of item clusters.
+    - device (str): Device to use ("cpu" or "cuda").
+    - scale (float): Final scaling factor of the matrix.
+    - shift_strength (float): Value in [0,1]; how strongly each item is moved toward its cluster mean.
+
+    Returns:
+    - X_clustered (Tensor): Matrix of shape (n, m), structured with soft clustering of items.
+    """
+    # Step 1: Generate initial matrix
+    X = generate_embeddings(n, m, d, device=device).clone().detach()  # shape (n, m)
+    # Step 2: Cluster item vectors (each column) in X.T
+    item_vectors = X.T.cpu().numpy()  # shape (m, n)
+    kmeans = KMeans(n_clusters=n_clusters, n_init="auto", random_state=42)
+    labels = kmeans.fit_predict(item_vectors)
+
+    # Step 3: Soft shift each item vector toward its cluster center
+    X_np = X.cpu().numpy()
+    X_shifted = X_np.copy()
+
+    for cluster_id in range(n_clusters):
+        item_indices = np.where(labels == cluster_id)[0]
+        if len(item_indices) == 0:
+            continue
+        cluster_mean = X_np[:, item_indices].mean(axis=1, keepdims=True)  # shape (n, 1)
+        for j in item_indices:
+            original = X_np[:, j:j+1]  # shape (n, 1)
+            X_shifted[:, j:j+1] = (1 - shift_strength) * original + shift_strength * cluster_mean
+
+    # Step 4: Convert back to tensor and apply global scaling
+    X_clustered = torch.tensor(X_shifted, dtype=torch.float32, device=device) * scale
+
+    return X_clustered
 
 
 def generate_structured_embeddings(n, m, d, num_clusters=5, cluster_std=0.1, device="cpu"):
@@ -413,7 +531,7 @@ def generate_correlated_embeddings(n, m, d, correlation_factor=0.8, device="cpu"
     U = U @ correlation_matrix
     V = V @ correlation_matrix
 
-    return U, V
+    return U/d, V/d
 
 
 import networkx as nx
@@ -437,29 +555,37 @@ def generate_graph_embeddings(n, m, d, device="cpu"):
     """
 
     # Create a bipartite graph (users and items)
-    G = nx.Graph()
-    
-    # Add nodes for users and items
-    G.add_nodes_from(range(n), bipartite=0)  # User nodes
-    G.add_nodes_from(range(n, n + m), bipartite=1)  # Item nodes
+    # Base low-d signal
+    d_eff=min(d,2)
 
-    # Randomly connect users to items (simulating interactions)
+    U_low = torch.randn(n, d_eff, device=device)
+    V_low = torch.randn(m, d_eff, device=device)
+    social_influence=0.3
+
+    noise=0.1,
+    # Build social graph
+    G = nx.watts_strogatz_graph(n, k=5, p=0.1)
+
+    # Apply social influence on U_low
     for u in range(n):
-        num_connections = torch.randint(10, 20, (1,)).item()  # Each user interacts with 1-5 items
-        item_choices = torch.randint(n, n + m, (num_connections,)).tolist()
-        G.add_edges_from([(u, item) for item in item_choices])
+        friends = list(G.neighbors(u))
+        if friends:
+            friend_mean = torch.stack([U_low[f] for f in friends]).mean(dim=0)
+            U_low[u] = (1 - social_influence) * U_low[u] + social_influence * friend_mean
 
-    # Compute node embeddings using Spectral Embedding
-    spectral_embeddings = nx.spectral_layout(G, dim=d)
+    # Extend with noise in remaining dimensions
+    U = torch.cat([U_low, noise * torch.randn(n, d - d_eff, device=device)], dim=1)
+    V = torch.cat([V_low, noise * torch.randn(m, d - d_eff, device=device)], dim=1)
 
-    # Extract user and item embeddings
-    U = torch.tensor([spectral_embeddings[i] for i in range(n)], dtype=torch.float32, device=device)
-    V = torch.tensor([spectral_embeddings[i] for i in range(n, n + m)], dtype=torch.float32, device=device)
+    # Normalize V for consistent scale
+    V = V / np.sqrt(d)
 
+    # Return final preference matrix
+    
     return U, V
 
 
-def generate_social_embeddings(n, m, d, social_influence=0.3, device="cpu"):
+def generate_social_embeddings(n, m, d, social_influence=0.5, device="cpu"):
     """
     Generates user (U) and item (V) embeddings influenced by social connections.
 
@@ -490,7 +616,7 @@ def generate_social_embeddings(n, m, d, social_influence=0.3, device="cpu"):
             friend_embeddings = torch.stack([U[f] for f in friends]).mean(dim=0)
             U[u] = (1 - social_influence) * U[u] + social_influence * friend_embeddings
 
-    return U, V
+    return U/np.log(d+1), V
 
 
 def generate_temporal_embeddings(n, m, d, timesteps=5, device="cpu"):
@@ -522,7 +648,7 @@ def generate_temporal_embeddings(n, m, d, timesteps=5, device="cpu"):
     time_drift_items = torch.randn(m, d, device=device) * 0.02
     V = V_base + timesteps * time_drift_items
 
-    return U, V
+    return U, V/np.sqrt(d)
 
 def generate_hierarchical_embeddings(n, m, d, num_groups=5, device="cpu"):
     """
@@ -549,12 +675,12 @@ def generate_hierarchical_embeddings(n, m, d, num_groups=5, device="cpu"):
     user_group_assignments = torch.randint(0, num_groups, (n,))
 
     # Generate users based on group embeddings + slight individual variation
-    U = group_embeddings[user_group_assignments] + 0.1 * torch.randn(n, d, device=device)
+    U = (group_embeddings[user_group_assignments] + 10 * torch.randn(n, d, device=device))
 
     # Generate structured item embeddings
     V = torch.randn(m, d, device=device)  # Items remain independent
 
-    return U, V
+    return U, V/np.log(d+1)
 
 
 def generate_gmm_embeddings(n, m, d, num_clusters=5, device="cpu"):
@@ -590,6 +716,7 @@ def generate_gmm_embeddings(n, m, d, num_clusters=5, device="cpu"):
 
 ############################################
 # These Funtions compute the preference score
+# These functions are never used but still here for some reason...
 ############################################
 
 
